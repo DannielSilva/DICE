@@ -35,16 +35,43 @@ import numpy as np
 import statsmodels.api as sm
 from sklearn.metrics import auc, roc_auc_score, roc_curve
 
+import torch.nn.functional as F
+
+import pickle
+from sklearn.model_selection import train_test_split
+
+# batch shape [batch_size, 3, 3, seq_length, input_dim]
+# first 3 corresponds to number of elements returned by Dataset
+# second 3 corresponds to size of list [data_x, data_v, data_y]
+def collate_fn(batch):
+    
+    
+    lens = [len(x[1]) for x in batch]
+    longest = max(lens)
+    #print(longest)
+    pad_boolean = not all(x==lens[0] for x in lens)
+    if pad_boolean:
+        #print('pad_boolean', lens) # uncomment this line to check when padding and the sizes
+        for i in range(len(batch)):
+            batch[i] = list(batch[i])
+
+        data_x = torch.stack([F.pad(input=x[1], pad=(0, 0, 0, longest - len(x[1])), mode='constant', value=0) for x in batch])
+
+    
+    else:
+        data_x = torch.stack([x[1] for x in batch], 0)
+    idx = torch.stack([x[0] for x in batch], 0)
+    data_v = torch.stack([x[2] for x in batch], 0)
+    data_y = torch.stack([x[3] for x in batch], 0)
+    data_c = torch.stack([x[4] for x in batch], 0)
+
+    return idx, data_x, data_v, data_y, data_c
+
 class yf_dataset_withdemo(Dataset):
-    def __init__(self, path, file_name, n_z):
-        self.path = path
-        self.file_name = file_name
-        self.n_z = n_z
-        
-        infile = open(self.path + self.file_name, 'rb')
-        new_list = pickle.load(infile)
-        
-        self.n_samples = len(new_list[0])
+    def __init__(self, X, y, n_z):
+
+        self.n_z = n_z   
+        self.n_samples = len(X)
         # init categary parameter, the following need to be initial outside here. 
         self.n_cat = None # number of categaries, Tensor.
         self.M = None # [n_hidden, n_clusters] centroid of clusters, the k-th column is the centroid of clusters, Tensor
@@ -52,28 +79,19 @@ class yf_dataset_withdemo(Dataset):
         self.pred_C = torch.LongTensor(np.array([0 for i in range(self.n_samples)])) # the cluster membership. the i-th 
         self.rep = None # [n_samples, n_hidden] the representations of each sample. the i-th element is also corresponding to idx = i.
 
-        data_x = new_list[0]
-        data_v = new_list[1]
-        data_y = new_list[2]
+        self.data_x = np.array(X['vector'])
+        self.data_v = np.array(torch.Tensor(X[['IDADE', 'GENERO']].values))
+        self.data_y = np.array(torch.Tensor(y['y_final'].values))
         
-        self.data_x = data_x
-        self.data_y = data_y # list 
-        self.data_v = data_v
 
-        samples_list = []
-        for i in range(len(data_x)):
-            totensor_data_x = torch.FloatTensor(np.array(data_x[i]))
-            totensor_data_v = torch.FloatTensor(np.array(data_v[i]))
-            totensor_data_y = torch.LongTensor(np.array([data_y[i]]))
-            samples_list.append([totensor_data_x,  totensor_data_v, totensor_data_y])
-        self.samples = samples_list
-        self.mylength = len(data_x)
+        self.mylength = len(self.data_x)
     
     def __len__(self):
         return self.mylength
 
     def __getitem__(self, idx):
-        return idx, self.samples[idx], self.C[idx]
+        #import IPython; IPython.embed(); exit(0)
+        return torch.tensor(idx, dtype = torch.long), torch.tensor(self.data_x[idx], dtype = torch.float32), torch.tensor(self.data_v[idx], dtype = torch.float32), torch.tensor(self.data_y[idx], dtype = torch.float32), self.C[idx]
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, nhidden, nlayers, dropout, cuda):
@@ -202,8 +220,8 @@ class model_2(nn.Module):
 
             # output_c dimension [batch_size, n_clusters]
             if mask_BoolTensor!=None:
-                if self.cuda:
-                    mask_BoolTensor = mask_BoolTensor.cuda()
+                #if self.cuda: //TOFDO
+                #    mask_BoolTensor = mask_BoolTensor.cuda()
                 output_c = output_c.masked_fill(mask = mask_BoolTensor, value=torch.tensor(0.0) )
             
             output_from_c = self.linear_regression_c(output_c)
@@ -234,14 +252,12 @@ def parse_args():
     parser.add_argument('--output_path', type=str, required=False,
                         help='location of output path')
 
-    parser.add_argument('--input_path', type=str, required=True,
+    parser.add_argument('--path_to_file_to_split', type=str, required=True,
                         help='location of input dataset')
 
-    parser.add_argument('--filename_train', type=str, required=True,
-                        help='location of the data corpus')
+    parser.add_argument('--path_to_labels', type=str, required=True,
+                        help='location of labels')
 
-    parser.add_argument('--filename_test', type=str, required=True,
-                        help='location of the data corpus')
 
     parser.add_argument('--n_input_fea', type=int, required=True,
                         help='number of original input feature size')
@@ -253,6 +269,9 @@ def parse_args():
                         help='number of hidden size in LSTM')
 
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
+    parser.add_argument('--clip', type=float, default=1.0, help='clipping value')
+    parser.add_argument('--test_size', type=float, default=0.33, help='percentage of total size for test split')
+    
 
     parser.add_argument('--lstm_dropout', type=float, default=0.0, help='dropout in LSTM')
 
@@ -265,10 +284,12 @@ def parse_args():
     parser.add_argument('--epoch_in_iter', type=int, default=1,
                         help='maximum of iterations in iteration merge clusters')
           
-    parser.add_argument('--seed', type=int, default=1111,
+    parser.add_argument('--seed', type=int, default=42,
                         help='random seed')
     parser.add_argument('--cuda', type=int, default=1,
                         help='If use cuda')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='batch size')
     
     parser.add_argument('--lambda_AE', type=float, default=1.0, help='lambda of AE in iteration')
     parser.add_argument('--lambda_classifier', type=float, default=1.0, help='lambda_classifier of classifier in iteration')
@@ -287,20 +308,17 @@ def test_AE(args, model, dataloader_test):
     test_error = []
     print("-----------------")
     model.eval()
-    for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_test):
-        data_x, data_v, target = batch_xvy
-        data_x = torch.autograd.Variable(data_x)
-        data_v = torch.autograd.Variable(data_v)
-        target = torch.autograd.Variable(target)
+    with torch.no_grad():
+        for batch_idx, (idx, data_x, data_v, data_y, batch_c) in enumerate(dataloader_test):
 
-        if args.cuda:
-            data_x = data_x.cuda()
-            data_v = data_v.cuda()
-            target = target.cuda()
+            if args.cuda:
+                data_x = data_x.cuda()
+                data_v = data_v.cuda()
+                target = target.cuda()
 
-        enc, pred = model(data_x, "autoencoder")
-        loss = criterion_MSE(data_x, pred)
-        test_error.append(loss.data.cpu().numpy())
+            enc, pred = model(data_x, "autoencoder")
+            loss = criterion_MSE(data_x, pred)
+            test_error.append(loss.detach().cpu().numpy())
     test_AE_error = np.mean(test_error)
     return test_AE_error
 
@@ -335,20 +353,18 @@ def test_AE(args, model, dataloader_test):
     test_error = []
     print("-----------------")
     model.eval()
-    for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_test):
-        data_x, data_v, target = batch_xvy
-        data_x = torch.autograd.Variable(data_x)
-        data_v = torch.autograd.Variable(data_v)
-        target = torch.autograd.Variable(target)
+    
+    with torch.no_grad():
+        for batch_idx, (idx, data_x, data_v, data_y, batch_c) in enumerate(dataloader_test):
 
-        if args.cuda:
-            data_x = data_x.cuda()
-            data_v = data_v.cuda()
-            target = target.cuda()
+            if args.cuda:
+                data_x = data_x.cuda()
+                data_v = data_v.cuda()
+                target = target.cuda()
 
-        enc, pred = model(data_x, "autoencoder")
-        loss = criterion_MSE(data_x, pred)
-        test_error.append(loss.data.cpu().numpy())
+            enc, pred = model(data_x, "autoencoder")
+            loss = criterion_MSE(data_x, pred)
+            test_error.append(loss.detach().cpu().numpy())
     test_AE_error = np.mean(test_error)
     return test_AE_error
 
@@ -358,22 +374,24 @@ def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
     # update date_test.rep
     final_embed = torch.randn(len(data_test), args.n_hidden_fea, dtype=torch.float)
     model.eval()
-    for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_test):
-        data_x, data_v, target = batch_xvy
-        data_x = torch.autograd.Variable(data_x)
-        data_v = torch.autograd.Variable(data_v)
-        target = torch.autograd.Variable(target)
+    with torch.no_grad():
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_test):
 
-        if args.cuda:
-            data_x = data_x.cuda()
-            data_v = data_v.cuda()
-            target = target.cuda()
+            if args.cuda:
+                data_x = data_x.cuda()
+                data_v = data_v.cuda()
+                target = target.cuda()
 
-        enc, pred = model(data_x, "autoencoder")
-    
-        embed = enc.data.cpu()[:,0,:]
-        final_embed[index] = embed
-
+            enc, pred = model(data_x, "autoencoder")
+            
+            embed = enc.detach().cpu()[:,0,:]
+            for l in index:
+                if np.isnan(embed).any():
+                    final_embed[l.item()] = torch.zeros(embed.size()[-1]) #zeros when nan :/ //TODO
+                else:
+                    final_embed[l.item()]=embed[l.item() % len(embed)]
+            #final_embed[index] = embed #np.isnan(final_embed).any()
+    #import IPython; IPython.embed(); exit(0)
     data_test.rep = final_embed 
     print("        update data_test R!")
 
@@ -587,39 +605,44 @@ def func_analysis_test_error_D0406(args, model, data_test, dataloader_test):
     outcome_true_y = []
     outcome_pred_prob = [] 
     print("-----------------")
-    for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_test):
-        data_x, data_v, target = batch_xvy
-        data_x = torch.autograd.Variable(data_x)
-        data_v = torch.autograd.Variable(data_v)
-        target = torch.autograd.Variable(target)
-        batch_c = torch.autograd.Variable(batch_c)
+    with torch.no_grad():
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_test):
 
-        if args.cuda:
-            data_x = data_x.cuda()
-            data_v = data_v.cuda()
-            target = target.cuda()
-            batch_c = batch_c.cuda()
-        
-        # x, function, demov, mask_BoolTensor
-        encoded_x, decoded_x, output_c_no_activate, output_outcome = model(x=data_x, function="outcome_logistic_regression", demov=data_v)
-        
-        loss_AE = criterion_MSE(data_x, decoded_x)
-        loss_outcome = criterion_BCE(output_outcome, target.float())
-        error_outcome_likelihood.append(loss_outcome.data.cpu().numpy())
-        error_AE.append(loss_AE.data.cpu().numpy())
+            if args.cuda:
+                data_x = data_x.cuda()
+                data_v = data_v.cuda()
+                target = target.cuda()
+                batch_c = batch_c.cuda()
+            
+            # x, function, demov, mask_BoolTensor
+            encoded_x, decoded_x, output_c_no_activate, output_outcome = model(x=data_x, function="outcome_logistic_regression", demov=data_v)
+            
+            loss_AE = criterion_MSE(data_x, decoded_x)
+            # if torch.max(output_outcome.squeeze(-1)) > 1 or torch.min(output_outcome.squeeze(-1)) < 0 or torch.max(target.float()) > 1 or torch.min(target.float() < 0):
+            #     import IPython; IPython.embed(); exit(0)
+            try:
+                loss_outcome = criterion_BCE(output_outcome.squeeze(-1), target.float())
+            except RuntimeError:
+                import IPython; IPython.embed(); exit(0)
+            
+            error_outcome_likelihood.append(loss_outcome.detach().cpu().numpy())
+            error_AE.append(loss_AE.detach().cpu().numpy())
 
-        # test datatest.C. 
-        # #print("output_c_no_activate =", output_c_no_activate)
-        # print()
-        # print("output_c_no_activate.data=",output_c_no_activate.data.cpu())
-        _, predicted = torch.max(output_c_no_activate.data, 1)
-        correct += (predicted == batch_c).sum().item()
-        total += batch_c.size(0)
+            # test datatest.C. 
+            # #print("output_c_no_activate =", output_c_no_activate)
+            # print()
+            # print("output_c_no_activate.data=",output_c_no_activate.data.cpu())
+            _, predicted = torch.max(output_c_no_activate.data, 1)
+            correct += (predicted == batch_c).sum().item()
+            total += batch_c.size(0)
 
-        outcome_true_y.append(target.data.cpu())
-        outcome_pred_prob.append(output_outcome.data.cpu()) 
+            outcome_true_y.append(target.detach().cpu())
+            outcome_pred_prob.append(output_outcome.detach().cpu()) 
 
-        data_test.pred_C[index] = predicted.cpu()
+            for l in index:
+                #print('l',l)
+                data_test.pred_C[l.item()]=predicted.cpu()[l.item() % len(predicted)]
+            #data_test.pred_C[index] = predicted.cpu()
     
     test_classifier_c_accuracy = correct/total 
     test_AE_loss = np.mean(error_AE)
@@ -672,6 +695,7 @@ def change_label_from_highratio_to_lowratio(args, oldlabel, data_train):
 
 def main(args):
     # Set the random seed manually for reproducibility.
+    
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -679,10 +703,16 @@ def main(args):
         torch.cuda.manual_seed(args.seed)
 
     # load data
-    data_train = yf_dataset_withdemo(args.input_path, args.filename_train, args.n_hidden_fea)
-    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=1, shuffle=True, drop_last=True)
-    data_test = yf_dataset_withdemo(args.input_path, args.filename_test, args.n_hidden_fea)
-    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=1, shuffle=False, drop_last=True)
+    with open(args.path_to_file_to_split, 'rb') as handle:
+        table = pickle.load(handle)
+    y = pd.read_csv(args.path_to_labels)
+
+    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
+    data_train = yf_dataset_withdemo(X_train, y_train, args.n_hidden_fea)
+    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=collate_fn)
+    data_test = yf_dataset_withdemo(X_test, y_test, args.n_hidden_fea)
+    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=collate_fn)
+
 
     # Algorithm 2 model
     model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
@@ -693,7 +723,10 @@ def main(args):
 
     print(model)
     if args.cuda:
+        print("using cuda")
         model = model.cuda()
+    else:
+        print("no cuda")
 
     # Autoencoder, initalize the representation 
     print("/////////////////////////////////////////////////////////////////////////////")
@@ -719,11 +752,7 @@ def main(args):
         error = []
         print("-----------------")
         model.train()
-        for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_train):
-            data_x, data_v, target = batch_xvy
-            data_x = torch.autograd.Variable(data_x)
-            data_v = torch.autograd.Variable(data_v)
-            target = torch.autograd.Variable(target)
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train): 
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -735,8 +764,9 @@ def main(args):
             optimizer.zero_grad()
             loss = criterion_MSE(data_x, pred)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
-            error.append(loss.data.cpu().numpy())
+            error.append(loss.detach().cpu().numpy())
         loss_list.append(np.mean(error))
 
         train_AE_loss = np.mean(error)
@@ -784,11 +814,7 @@ def main(args):
         # part 2, clustering.
         final_embed = torch.randn(len(data_train), args.n_hidden_fea, dtype=torch.float)
         model.eval()
-        for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_train):
-            data_x, data_v, target = batch_xvy
-            data_x = torch.autograd.Variable(data_x)
-            data_v = torch.autograd.Variable(data_v)
-            target = torch.autograd.Variable(target)
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train):
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -796,8 +822,11 @@ def main(args):
                 target = target.cuda()
 
             enc, pred = model(data_x, "autoencoder")
-            embed = enc.data.cpu()[:,0,:]
-            final_embed[index]=embed
+            embed = enc.detach().cpu()[:,0,:]
+            #import IPython; IPython.embed(); exit(0)
+            for l in index:
+                #print('l',l)
+                final_embed[l.item()]=embed[l.item() % len(embed)]
 
         #final_embed = np.vstack(embedding_list)
         final_embed = final_embed.numpy()
@@ -842,6 +871,7 @@ def main(args):
         # use the kmeans label (I think the result maybe the same.)
         test_final_embed = data_test.rep 
         test_final_embed = test_final_embed.numpy()
+        #import IPython; IPython.embed(); exit(0)
         test_cluster_old_labels = kmeans.predict(test_final_embed)
         test_list_c = test_cluster_old_labels.tolist()
         test_new_list_c = []
@@ -876,12 +906,7 @@ def main(args):
             outcome_pred_prob = [] 
             print("-----------------")
             model.train()
-            for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_train):
-                data_x, data_v, target = batch_xvy
-                data_x = torch.autograd.Variable(data_x)
-                data_v = torch.autograd.Variable(data_v)
-                target = torch.autograd.Variable(target)
-                batch_c = torch.autograd.Variable(batch_c)
+            for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train):
 
                 if args.cuda:
                     data_x = data_x.cuda()
@@ -921,9 +946,10 @@ def main(args):
                 optimizer.zero_grad()
                 loss_classifier = criterion_CrossEntropy(output_c_no_activate, batch_c)
                 loss_AE = criterion_MSE(data_x, decoded_x)
-                loss_outcome = criterion_BCE(output_outcome, target.float())
-                loss_outcome_mask_k1 = criterion_BCE(output_outcome_mask_k1, target.float())
-                loss_outcome_mask_k1k2 = criterion_BCE(output_outcome_mask_k1k2, target.float())
+                #import IPython; IPython.embed(); exit(0)
+                loss_outcome = criterion_BCE(output_outcome.squeeze(-1), target.float())
+                loss_outcome_mask_k1 = criterion_BCE(output_outcome_mask_k1.squeeze(-1), target.float())
+                loss_outcome_mask_k1k2 = criterion_BCE(output_outcome_mask_k1k2.squeeze(-1), target.float())
                 loss_G = 2*(loss_outcome_mask_k1k2 - loss_outcome_mask_k1)
                 loss_p_value = 3.841 - loss_G #  we want loss_p_value < 0 as much as possible. 
 
@@ -932,21 +958,26 @@ def main(args):
                         + args.lambda_outcome*loss_outcome \
                         + args.lambda_p_value*loss_p_value 
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 optimizer.step()
 
-                error_AE.append(loss_AE.data.cpu().numpy())
-                error_classifier.append(loss_classifier.data.cpu().numpy())
-                error_outcome.append(loss_outcome.data.cpu().numpy())
-                error_p_value.append(loss_p_value.data.cpu().numpy())
-                error_outcome_likelihood.append(loss_outcome.data.cpu().numpy())
+                error_AE.append(loss_AE.detach().cpu().numpy())
+                error_classifier.append(loss_classifier.detach().cpu().numpy())
+                error_outcome.append(loss_outcome.detach().cpu().numpy())
+                error_p_value.append(loss_p_value.detach().cpu().numpy())
+                error_outcome_likelihood.append(loss_outcome.detach().cpu().numpy())
                 
                 _, predicted = torch.max(output_c_no_activate.data, 1)
-                data_train.pred_C[index] = predicted.cpu()
+
+                for l in index:
+                    #print('l',l)
+                    data_train.pred_C[l.item()]=predicted.cpu()[l.item() % len(predicted)]
+                #data_train.pred_C[index] = predicted.cpu()
                 total += batch_c.size(0)
                 correct += (predicted == batch_c).sum().item()
 
-                outcome_true_y.append(target.data.cpu())
-                outcome_pred_prob.append(output_outcome.data.cpu())
+                outcome_true_y.append(target.detach().cpu())
+                outcome_pred_prob.append(output_outcome.detach().cpu())
         
             train_outcome_auc_score = roc_auc_score(np.concatenate(outcome_true_y,0), np.concatenate(outcome_pred_prob,0))
             print("total=", total)
