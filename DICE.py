@@ -39,6 +39,7 @@ import torch.nn.functional as F
 
 import pickle
 from sklearn.model_selection import train_test_split
+from tqdm.notebook import tqdm, trange
 
 # batch shape [batch_size, 3, 3, seq_length, input_dim]
 # first 3 corresponds to number of elements returned by Dataset
@@ -68,7 +69,23 @@ def collate_fn(batch):
     return idx, data_x, data_v, data_y, data_c
 
 class yf_dataset_withdemo(Dataset):
-    def __init__(self, X, y, n_z):
+    def __init__(self, X, y, n_z, mode='train'):
+        #import IPython; IPython.embed(); import sys; sys.exit(0)
+
+        if mode == 'test':
+            print('removing idx with nan', X.shape)
+            v = []
+            for i, x in enumerate(X['vector']):
+                if np.isnan(x).any():
+                    v.append(i)
+            # [204, 208, 389, 893] # indixes with nan
+            mapped_ids = [X.index[idx] for idx in v]
+            y_ids = [y.index[idx] for idx in v]
+            X.drop(mapped_ids, axis=0, inplace=True)
+            y.drop(y_ids, axis=0, inplace=True) #same mapping ids for y
+            
+            #import IPython; IPython.embed(); import sys; sys.exit(0)
+
 
         self.n_z = n_z   
         self.n_samples = len(X)
@@ -85,13 +102,12 @@ class yf_dataset_withdemo(Dataset):
         
 
         self.mylength = len(self.data_x)
-    
     def __len__(self):
         return self.mylength
 
     def __getitem__(self, idx):
         #import IPython; IPython.embed(); exit(0)
-        return torch.tensor(idx, dtype = torch.long), torch.tensor(self.data_x[idx], dtype = torch.float32), torch.tensor(self.data_v[idx], dtype = torch.float32), torch.tensor(self.data_y[idx], dtype = torch.float32), self.C[idx]
+        return torch.tensor(idx, dtype = torch.long), self.data_x[idx].float(), torch.tensor(self.data_v[idx], dtype = torch.float32), torch.tensor(self.data_y[idx], dtype = torch.float32), self.C[idx]
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, nhidden, nlayers, dropout, cuda):
@@ -125,6 +141,7 @@ class EncoderRNN(nn.Module):
             zeros = zeros.cuda()
         newinput = torch.cat((zeros, newinput),1)
         newinput = newinput[:, :-1, :]
+        #import IPython; IPython.embed(); import sys; sys.exit(0)
         #print("output.size()=",output.size()) # output.size()= torch.Size([1, 10, 100])
         #print("hn.size()=",hn.size()) # hn.size()= torch.Size([1, 1, 100])
         #print("hn=",hn)
@@ -214,7 +231,7 @@ class model_2(nn.Module):
             decoded_x = self.decoder(newinput, (hn, cn))
             decoded_x = self.linear_decoder_output(decoded_x)
             
-            encoded_x = encoded_x[:,0,:]
+            encoded_x = encoded_x.mean(1)#encoded_x[:,0,:]
             output_c_no_activate = self.linear_classifier_c(encoded_x)
             output_c = self.activateion_classifier(output_c_no_activate)
 
@@ -303,7 +320,7 @@ def parse_args():
     return args
 
 
-def test_AE(args, model, dataloader_test):
+'''def test_AE(args, model, dataloader_test):
     criterion_MSE = nn.MSELoss()
     test_error = []
     print("-----------------")
@@ -321,7 +338,7 @@ def test_AE(args, model, dataloader_test):
             test_error.append(loss.detach().cpu().numpy())
     test_AE_error = np.mean(test_error)
     return test_AE_error
-
+'''
 def update_M(data_train):
     # assert columns(M) = data_train.n_cat
     if data_train.M.size()[1] != data_train.n_cat:
@@ -346,16 +363,18 @@ def update_M(data_train):
         embed_list = torch.stack(dict_c_embedding[c_key])
         embed_mean_dim0 = embed_list.mean(dim=0)
         data_train.M[:,c_key] = embed_mean_dim0 
-    print("    update M!")
+    #print("    update M!")
 
 def test_AE(args, model, dataloader_test):
     criterion_MSE = nn.MSELoss()
     test_error = []
-    print("-----------------")
+    #print("-----------------")
     model.eval()
+    encs = []
+    preds = []
     
     with torch.no_grad():
-        for batch_idx, (idx, data_x, data_v, data_y, batch_c) in enumerate(dataloader_test):
+        for batch_idx, (idx, data_x, data_v, data_y, batch_c) in enumerate(tqdm(dataloader_test, desc='AE testing split')):
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -363,19 +382,25 @@ def test_AE(args, model, dataloader_test):
                 target = target.cuda()
 
             enc, pred = model(data_x, "autoencoder")
+
+            if np.isnan(enc).any():
+                encs.append({'i': idx, 'enc':enc})
+            if np.isnan(pred).any():
+                preds.append({'i': idx, 'enc':pred})
             loss = criterion_MSE(data_x, pred)
             test_error.append(loss.detach().cpu().numpy())
     test_AE_error = np.mean(test_error)
+    #import IPython; IPython.embed(); import sys; sys.exit(0)
     return test_AE_error
 
 def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
-    print("-----------------")
-    print("    update_testset_R_C_M_K")
+    #print("-----------------")
+    #print("update_testset_R_C_M_K")
     # update date_test.rep
     final_embed = torch.randn(len(data_test), args.n_hidden_fea, dtype=torch.float)
     model.eval()
     with torch.no_grad():
-        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_test):
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_test, desc='Update parameters in test set')):
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -384,21 +409,21 @@ def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
 
             enc, pred = model(data_x, "autoencoder")
             
-            embed = enc.detach().cpu()[:,0,:]
+            embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
             for l in index:
                 if np.isnan(embed).any():
-                    final_embed[l.item()] = torch.zeros(embed.size()[-1]) #zeros when nan :/ //TODO
+                    raise ValueError("ValueError Nan embedding") #final_embed[l.item()] = torch.zeros(embed.size()[-1]) #zeros when nan :/ //TODO
                 else:
                     final_embed[l.item()]=embed[l.item() % len(embed)]
             #final_embed[index] = embed #np.isnan(final_embed).any()
     #import IPython; IPython.embed(); exit(0)
     data_test.rep = final_embed 
-    print("        update data_test R!")
+    #print("update data_test R!")
 
     data_test.n_cat = data_train.n_cat
-    print("        update data_test n_cat")
+    #print("update data_test n_cat")
     data_test.M = data_train.M
-    print("        update data_test M")
+    #print("update data_test M")
     # update date_test.C
     representations = data_test.rep
     for i in range(representations.size()[0]):
@@ -407,7 +432,7 @@ def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
         xj = torch.norm(trans_embed - data_train.M, dim=0)
         new_cluster = torch.argmin(xj)
         data_test.pred_C[i] = new_cluster
-    print("        update pred data_test C")
+    #print("update pred data_test C")
 
 
 def p_value_calculate(X, y, is_intercept, X_null=None):
@@ -604,9 +629,10 @@ def func_analysis_test_error_D0406(args, model, data_test, dataloader_test):
     outcome_auc = 0 
     outcome_true_y = []
     outcome_pred_prob = [] 
-    print("-----------------")
+    #print("-----------------")
+    idx = []
     with torch.no_grad():
-        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_test):
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_test, desc='Test error')):
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -623,6 +649,7 @@ def func_analysis_test_error_D0406(args, model, data_test, dataloader_test):
             try:
                 loss_outcome = criterion_BCE(output_outcome.squeeze(-1), target.float())
             except RuntimeError:
+                #continue
                 import IPython; IPython.embed(); exit(0)
             
             error_outcome_likelihood.append(loss_outcome.detach().cpu().numpy())
@@ -707,12 +734,14 @@ def main(args):
         table = pickle.load(handle)
     y = pd.read_csv(args.path_to_labels)
 
-    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
-    data_train = yf_dataset_withdemo(X_train, y_train, args.n_hidden_fea)
-    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=collate_fn)
-    data_test = yf_dataset_withdemo(X_test, y_test, args.n_hidden_fea)
-    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=collate_fn)
 
+
+    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
+    data_train = yf_dataset_withdemo(X_train, y_train, args.n_hidden_fea, mode='train')
+    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    data_test = yf_dataset_withdemo(X_test, y_test, args.n_hidden_fea, mode='test')
+    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    #import IPython; IPython.embed(); import sys; sys.exit(0)
 
     # Algorithm 2 model
     model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
@@ -729,7 +758,7 @@ def main(args):
         print("no cuda")
 
     # Autoencoder, initalize the representation 
-    print("/////////////////////////////////////////////////////////////////////////////")
+    #print("/////////////////////////////////////////////////////////////////////////////")
     print("part 1: train AE and for representation initialization")
 
     args.output_path = "./hn_"+str(args.n_hidden_fea)+"_K_"+str(args.K_clusters)
@@ -748,11 +777,11 @@ def main(args):
     number_reassign_list = []
     random_state_list = []
 
-    for epoch in range(args.init_AE_epoch):
+    for epoch in trange(args.init_AE_epoch,desc='AE phase 1 training'):
         error = []
-        print("-----------------")
+        #print("-----------------")
         model.train()
-        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train): 
+        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_train, desc='AE training split')): 
 
             if args.cuda:
                 data_x = data_x.cuda()
@@ -786,8 +815,8 @@ def main(args):
     plt.close()
 
     print("part 1, initial done!")
-    print("////////////////////////////////////////////////////////////////////////////////////")
-    print("part 2, start optimizaiton the main loss")
+    #print("////////////////////////////////////////////////////////////////////////////////////")
+    print("part 2, start optimization of the main loss")
     part2_foldername = args.output_path + "/part2_AE_nhidden_"+str(args.n_hidden_fea)
     if os.path.isdir(part2_foldername):
         shutil.rmtree(part2_foldername)
@@ -808,33 +837,34 @@ def main(args):
 
     saved_iter = -1 
     saved_iter_list = []
-    for iter_i in range(args.iter):
-        print("****************************************************************************************")
-        print("iter_i=", iter_i)
+    for iter_i in trange(args.iter, desc='main loss'):
+        #print("****************************************************************************************")
+        #print("iter_i=", iter_i)
         # part 2, clustering.
         final_embed = torch.randn(len(data_train), args.n_hidden_fea, dtype=torch.float)
         model.eval()
-        for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train):
+        with torch.no_grad():
+            for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_train, desc='Get embeddings')):
 
-            if args.cuda:
-                data_x = data_x.cuda()
-                data_v = data_v.cuda()
-                target = target.cuda()
+                if args.cuda:
+                    data_x = data_x.cuda()
+                    data_v = data_v.cuda()
+                    target = target.cuda()
 
-            enc, pred = model(data_x, "autoencoder")
-            embed = enc.detach().cpu()[:,0,:]
-            #import IPython; IPython.embed(); exit(0)
-            for l in index:
-                #print('l',l)
-                final_embed[l.item()]=embed[l.item() % len(embed)]
+                enc, pred = model(data_x, "autoencoder")
+                embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
+                #import IPython; IPython.embed(); exit(0)
+                for l in index:
+                    #print('l',l)
+                    final_embed[l.item()]=embed[l.item() % len(embed)]
 
         #final_embed = np.vstack(embedding_list)
         final_embed = final_embed.numpy()
-        print("    final_embed.shape=",final_embed.shape)
+        #print("final_embed.shape=",final_embed.shape)
 
         #clustering = AgglomerativeClustering(n_clusters=args.K_clusters).fit(final_embed)
         random_state = np.random.randint(1234)
-        print("random_state=", random_state)
+        #print("random_state=", random_state)
         random_state_list.append(random_state)
         kmeans = KMeans(n_clusters=args.K_clusters, random_state=random_state).fit(final_embed)
         final_embed = torch.from_numpy(final_embed)
@@ -845,21 +875,21 @@ def main(args):
         oldlabel = kmeans.labels_
         new_labels, order_c_map = change_label_from_highratio_to_lowratio(args, oldlabel, data_train)
         number_reassign = len(data_train)-(torch.LongTensor(new_labels) == data_train.C).sum().item()
-        print("number_reassign=",number_reassign)
+        #print("number_reassign=",number_reassign)
         number_reassign_list.append(number_reassign)
         data_train.C = torch.LongTensor(new_labels)
 
         data_train.n_cat = args.K_clusters 
         data_train.M = torch.FloatTensor(args.n_hidden_fea, args.K_clusters)
-        print("***************************************")
-        print("data_train.M[0,:]=",data_train.M[0,:])
+        #print("***************************************")
+        #print("data_train.M[0,:]=",data_train.M[0,:])
         update_M(data_train)
-        print("data_train.M[0,:]=",data_train.M[0,:])
+        #print("data_train.M[0,:]=",data_train.M[0,:])
 
-        print("    data_train.M.shape=", data_train.M.shape)
-        print("    data_train.C.shape=", data_train.C.shape)
-        print("    data_train.rep.shape=", data_train.rep.shape)
-        print("4. init train *.M, *.C, *.rep done!")
+        #print("    data_train.M.shape=", data_train.M.shape)
+        #print("    data_train.C.shape=", data_train.C.shape)
+        #print("    data_train.rep.shape=", data_train.rep.shape)
+        #print("4. init train *.M, *.C, *.rep done!")
 
 
         # create pseudo-label.
@@ -891,10 +921,10 @@ def main(args):
         list_train_p_value_min = []
         list_outcome_likelihood = []
 
-        for epoch in range(args.epoch_in_iter):
-            print("epoch=",epoch)
-            print("---------------------------------------------------------------------------------")
-            print("iter_i = {}, epoch={}".format(iter_i, epoch))
+        for epoch in trange(args.epoch_in_iter, desc='outcome & clustering'):
+            #print("epoch=",epoch)
+            #print("---------------------------------------------------------------------------------")
+            #print("iter_i = {}, epoch={}".format(iter_i, epoch))
             total = 0
             correct = 0 
             error_AE = []
@@ -904,9 +934,9 @@ def main(args):
             error_outcome_likelihood = []
             outcome_true_y = []
             outcome_pred_prob = [] 
-            print("-----------------")
+            #print("-----------------")
             model.train()
-            for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(dataloader_train):
+            for batch_idx, (index, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_train, desc='epoch for outcome & clustering')):
 
                 if args.cuda:
                     data_x = data_x.cuda()
@@ -980,7 +1010,7 @@ def main(args):
                 outcome_pred_prob.append(output_outcome.detach().cpu())
         
             train_outcome_auc_score = roc_auc_score(np.concatenate(outcome_true_y,0), np.concatenate(outcome_pred_prob,0))
-            print("total=", total)
+            #print("total=", total)
             classifier_c_accuracy = correct/total
 
 
@@ -1015,14 +1045,14 @@ def main(args):
             iter_train_auc_list.append(train_outcome_auc_score)
             iter_test_auc_list.append(test_outcome_auc_score)
 
-            print("epoch {:2d}: train AE loss= {:.4e}, c acc= {:.4e}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}, classifier loss= {:.4e}, outcome loss= {:.4e}, p_value loss= {:.4e},".format(epoch, train_AE_loss, classifier_c_accuracy, train_outcome_likeilhood, train_outcome_auc_score, train_classifier_loss, train_outcome_loss, train_p_value_loss))
-            print("        : test  AE loss= {:.4e}, c acc= {:.4e}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}".format(test_AE_loss, test_classifier_c_accuracy, test_outcome_likelihood, test_outcome_auc_score))
+            print("epoch {:2d}: train AE loss= {:.4e}, c acc= {:%}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}, classifier loss= {:.4e}, outcome loss= {:.4e}, p_value loss= {:.4e},".format(epoch, train_AE_loss, classifier_c_accuracy, train_outcome_likeilhood, train_outcome_auc_score, train_classifier_loss, train_outcome_loss, train_p_value_loss))
+            print("        : test  AE loss= {:.4e}, c acc= {:%}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}".format(test_AE_loss, test_classifier_c_accuracy, test_outcome_likelihood, test_outcome_auc_score))
 
 
             # check p-value
             # first use data_train.C to calculate p-value, then use the preict c to calculate. (From classification, we can clearly see the accuracy is very high, so I think equal)
             # prepare the variable for regression. Bring data_x, data_v, data_y, data_train.C. (the order is the same in dataset).
-            dict_outcome_ratio, dict_p_value = analysis_p_value_related(data_train, args.K_clusters, 1) 
+            dict_outcome_ratio, dict_p_value = analysis_p_value_related(data_train, args.K_clusters, 0) 
             dict_p_value_list = list(dict_p_value.values())
             flag_morethan_0p05 = 0 
             for item in dict_p_value_list:
