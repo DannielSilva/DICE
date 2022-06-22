@@ -35,19 +35,15 @@ To train the model(s) in the paper, run the following commands:
 
 Here in each bash file, we train the model with fixed K (number of clusters) and d ( dimension of representation), that is: 
 ```
-python DICE_HF.py --init_AE_epoch 1 --n_hidden_fea  $n_hidden_fea --input_path "./dataset/" 
---filename_train "datatrain.pkl" --filename_test "datavalid.pkl" --n_input_fea 360 
---n_dummy_demov_fea 9 --lstm_layer 1 --lr 0.0001 --K_clusters 2 --iter 60 
---epoch_in_iter 1 --lambda_AE 1.0 --lambda_classifier 1.0 --lambda_outcome 10.0 
---lambda_p_value 1.0 >k2hn$n_hidden_fea.log
+python DICE.py --run_name="n_hidden_fea $n_hidden_fea for k2" --cuda 1 --batch_size=4 --init_AE_epoch 1 --n_hidden_fea  $n_hidden_fea --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv' --n_input_fea 3035 --n_dummy_demov_fea 2 --lstm_layer 1 --lr 0.0001 --K_clusters 2 --iter 60 --epoch_in_iter 1 --lambda_AE 1.0 --lambda_classifier 1.0 --lambda_outcome 10.0 --lambda_p_value 1.0 >k2hn$n_hidden_fea.log
 ```
 Parameters:
 ```
+      --run_name : wandb run name
+      --path_to_file_to_split : data file with data to split in train and test splits
+      --path_to_labels : path to label csv
       --init_AE_epoch: epoch for the representation initialization by AutoEncoder
       --n_hidden_fea: the dimension for representation, hn for short in the below content
-      --input_path: data path 
-      --filename_train: name of train file 
-      --filename_test: name of test file 
       --n_input_fea: dimension of input file features 
       --n_dummy_demov_fea: number of features of v (dummy features of demographics) 
       --lr: learning rate 
@@ -68,19 +64,21 @@ Output:
 
 
 ## Architecture search
-After training, we do the neural architecture search based on the AUC score on validation set, 
+After training, we do the neural architecture search based on the AUC score on validation set,
+``` 
+./run_NAS_DICE.sh
+```
+which contains:
+
 ``` architecture_search
-python NAS_DICE.py --training_output_path "./" --input_path "./dataset/"
---filename_train datatrain.pkl --filename_valid datavalid.pkl --filename_test datatest.pkl 
---n_input_fea 360 --n_dummy_demov_fea 9 
+python NAS_DICE.py --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2
 ```
 Parameters:
 ```
-      --training_output_path: path of training output
-      --input_path: data path 
-      --filename_train: name of train file 
-      --filename_valid: name of valid file
-      --filename_test: name of test file 
+      --run_name : wandb run name
+      --path_to_file_to_split : data file with data to split in train and test splits
+      --path_to_labels : path to label csv
+      --training_output_path: path of training output 
       --n_input_fea: dimension of input file features 
       --n_dummy_demov_fea: number of features of v (dummy features of demographics) 
 ```
@@ -92,43 +90,48 @@ final search result based on the maximum AUC score on validation set, K=4, hn=35
 
 ## Evaluation
 ### 1. Visualization of representations, run 
+
+``` 
+./run_representation_visualization.sh
+```
+which contains:
+
 ```visualization
-python representation_visualization.py --training_output_path "./" --input_path './dataset/'
- --filename_train datatrain.pkl --filename_valid datavalid.pkl --filename_test datatest.pkl 
- --n_input_fea 360 --n_dummy_demov_fea 9 --K_clusters 4 --n_hidden_fea 35
+python representation_visualization.py --image_name 'tsne_3d_original.png' --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80
 ```
 Parameters: 
 ```
       --training_output_path: path of training output
-      --input_path: data path 
-      --filename_train: name of train file 
-      --filename_valid: name of valid file
-      --filename_test: name of test file 
+      --image_name : output image name
+      --path_to_file_to_split : data file with data to split in train and test splits
+      --path_to_labels : path to label csv
       --n_input_fea: dimension of input file features 
       --n_dummy_demov_fea: number of features of v (dummy features of demographics) 
       --K_clusters: number of clusters
       --n_hidden_fea: the dimension for representation
 ```
-Output: Figure named tsne_3d.png.</br>
+Output: Figure named after args.image_name.</br>
 
 
 ### 2. Clustering performance on test set, run 
+``` 
+./run_clustering_metrics.sh
+```
+which contains:
 ```clustering
-python clustering_metrics.py --training_output_path "./" --input_path "./dataset/" 
---filename_train datatrain.pkl --filename_valid datavalid.pkl 
---filename_test datatest.pkl --n_input_fea 360 --n_dummy_demov_fea 9 
---K_clusters 4 --n_hidden_fea 35
+python clustering_metrics.py --run_name='clustering-metrics-1' --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80
 ```
 Parameters: the same as the former subsection. </br>
 Output: Silhouette score, Calinski-Harabasz score, Davies_Bouldin score. </br>
 
 
 ### 3. Outcome prediction with representation as input, run
+``` 
+./run_outcome_prediction.sh
+```
+which contains:
 ``` outcome_prediction 
-python outcome_prediction.py --training_output_path "./" --input_path "./dataset/" 
---filename_train datatrain.pkl --filename_valid datavalid.pkl 
---filename_test datatest.pkl --n_input_fea 360 --n_dummy_demov_fea 9 
---K_clusters 4 --n_hidden_fea 35
+python outcome_prediction.py --run_name='outcome-prediction' --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../diabetes_processedFeats_orderedSeqLength.pickle' --path_to_labels='../y_diabetes.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80
 ```
 Parameters: the same as the former subsection. </br>
 Output: AUC, ACC, FPR, TPR, FNR, TNR, PPV, NPV. </br>
