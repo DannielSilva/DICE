@@ -51,182 +51,9 @@ from sklearn.metrics import confusion_matrix
 from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score
 
-class yf_dataset_withdemo(Dataset):
-    def __init__(self, path, file_name, n_z):
-        self.path = path
-        self.file_name = file_name
-        self.n_z = n_z
-        
-        infile = open(self.path + self.file_name, 'rb')
-        new_list = pickle.load(infile)
-        
-        self.n_samples = len(new_list[0])
-        # init categary parameter, the following need to be initial outside here. 
-        self.n_cat = None # number of categaries, Tensor.
-        self.M = None # [n_hidden, n_clusters] centroid of clusters, the k-th column is the centroid of clusters, Tensor
-        self.C = torch.LongTensor(np.array([0 for i in range(self.n_samples)])) # the cluster membership. the i-th emement is corresponding to the original data idx = i.
-        self.pred_C = torch.LongTensor(np.array([0 for i in range(self.n_samples)])) # the cluster membership. the i-th 
-        self.rep = None # [n_samples, n_hidden] the representations of each sample. the i-th element is also corresponding to idx = i.
-
-        data_x = new_list[0]
-        data_v = new_list[1]
-        data_y = new_list[2]
-        
-        self.data_x = data_x
-        self.data_y = data_y # list 
-        self.data_v = data_v
-
-        samples_list = []
-        for i in range(len(data_x)):
-            totensor_data_x = torch.FloatTensor(np.array(data_x[i]))
-            totensor_data_v = torch.FloatTensor(np.array(data_v[i]))
-            totensor_data_y = torch.LongTensor(np.array([data_y[i]]))
-            samples_list.append([totensor_data_x,  totensor_data_v, totensor_data_y])
-        self.samples = samples_list
-        self.mylength = len(data_x)
-    
-    def __len__(self):
-        return self.mylength
-
-    def __getitem__(self, idx):
-        return idx, self.samples[idx], self.C[idx]
-
-class EncoderRNN(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout, cuda):
-        super(EncoderRNN, self).__init__()
-        self.nhidden = nhidden
-        self.feasize = input_size
-        self.nlayers = nlayers
-        self.dropout = dropout
-        self.cuda = cuda 
-        self.lstm = nn.LSTM(input_size=self.feasize,
-                               hidden_size=self.nhidden,
-                               num_layers=self.nlayers,
-                               dropout=self.dropout,
-                               batch_first=True)
-        self.init_weights()
-
-    def init_weights(self):
-        #nn.init.orthogonal_(self.lstm.weight_ih_l0, gain=np.sqrt(2))
-        for p in self.lstm.parameters():
-            p.data.uniform_(-0.1, 0.1)
-
-    def forward(self, x):
-        batch_size = x.size()[0]
-        output, state = self.lstm(x) #output [batch_size, seq_size, hidden_size]
-        hn, cn = state
-        #hidden = hidden_state[-1]  # get hidden state of last layer of encoder
-        output = torch.flip(output, [1])
-        newinput = torch.flip(x,[1])        
-        zeros = torch.zeros(batch_size, 1, x.shape[-1]) #zeros = torch.zeros(batch_size, 1, x.shape[-1])
-        if self.cuda:
-            zeros = zeros.cuda()
-        newinput = torch.cat((zeros, newinput),1)
-        newinput = newinput[:, :-1, :]
-        return output, (hn, cn), newinput
-
-class DecoderRNN(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout):
-        super(DecoderRNN, self).__init__()
-        self.nhidden = nhidden
-        self.feasize = input_size
-        self.nlayers = nlayers
-        self.dropout = dropout
-        self.lstm = nn.LSTM(input_size=self.feasize,
-                               hidden_size=self.nhidden,
-                               num_layers=self.nlayers,
-                               dropout=self.dropout,
-                               batch_first=True)
-        self.init_weights()
-
-    def init_weights(self):
-        #nn.init.orthogonal_(self.lstm.weight_ih_l0, gain=np.sqrt(2))
-        for p in self.lstm.parameters():
-            p.data.uniform_(-0.1, 0.1)
-
-    def forward(self, x, h):
-        output, state = self.lstm(x, h)
-        fin = torch.flip(output, [1])
-        return fin
-
-class model_2(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout, n_clusters, n_dummy_demov_fea, para_cuda):
-        super(model_2, self).__init__()
-        self.nhidden = nhidden
-        self.input_size = input_size
-        self.nlayers = nlayers
-        self.dropout = dropout
-        self.n_clusters = n_clusters
-        self.n_dummy_demov_fea = n_dummy_demov_fea
-        self.para_cuda = para_cuda
-        self.encoder = EncoderRNN(self.input_size, self.nhidden, self.nlayers, self.dropout, self.para_cuda)
-        self.decoder = DecoderRNN(self.input_size, self.nhidden, self.nlayers, self.dropout)
-        self.linear_decoder_output = nn.Linear(self.nhidden, self.input_size)
-        self.linear_classifier_c = nn.Linear(self.nhidden, self.n_clusters) 
-        self.activateion_classifier = nn.Softmax(dim=1)
-        self.linear_regression_c = nn.Linear(self.n_clusters, 1)
-        self.linear_regression_demov = nn.Linear(self.n_dummy_demov_fea, 1)
-        self.activation_regression = nn.Sigmoid()
-        self.init_weights()
-
-
-    def init_weights(self):
-        #nn.init.orthogonal_(self.linear.weight, gain=np.sqrt(2))
-        self.linear_decoder_output.bias.data.fill_(0)
-        self.linear_decoder_output.weight.data.uniform_(-0.1,0.1)
-        
-        self.linear_classifier_c.bias.data.fill_(0)
-        self.linear_classifier_c.weight.data.uniform_(-0.1,0.1)
-        
-        self.linear_regression_c.bias.data.fill_(0)
-        self.linear_regression_c.weight.data.uniform_(-0.1,0.1)
-        
-        self.linear_regression_demov.bias.data.fill_(0)
-        self.linear_regression_demov.weight.data.uniform_(-0.1,0.1)
-    
-    def forward(self, x, function, demov = None, mask_BoolTensor = None):
-        '''
-        mask = 1, mask one cluster. 
-        mask = 2, mask two cluster. 
-        mask_index: list() of index. 
-        '''
-        if function =="autoencoder":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            decoded_x = self.decoder(newinput, (hn, cn))
-            decoded_x = self.linear_decoder_output(decoded_x)
-            return encoded_x, decoded_x
-        elif function == "get_representation":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            return encoded_x  
-        elif function == "classifier":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            output = self.linear_classifier_c(encoded_x)
-            output = self.activateion_classifier(output)
-            return encoded_x, output 
-        elif function == "outcome_logistic_regression":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            decoded_x = self.decoder(newinput, (hn, cn))
-            decoded_x = self.linear_decoder_output(decoded_x)
-            
-            encoded_x = encoded_x[:,0,:]
-            output_c_no_activate = self.linear_classifier_c(encoded_x)
-            output_c = self.activateion_classifier(output_c_no_activate)
-
-            # output_c dimension [batch_size, n_clusters]
-            if mask_BoolTensor!=None:
-                if self.cuda:
-                    mask_BoolTensor = mask_BoolTensor.cuda()
-                output_c = output_c.masked_fill(mask = mask_BoolTensor, value=torch.tensor(0.0) )
-            
-            output_from_c = self.linear_regression_c(output_c)
-            output_from_v = self.linear_regression_demov(demov)
-            output_cpv = output_from_c + output_from_v
-            output_outcome = self.activation_regression(output_cpv)
-            return encoded_x, decoded_x, output_c_no_activate, output_outcome
-        else:
-            print(" No corresponding function, check the function you want to for model_2")
-            return "Wrong!"    
-
+from DICE import yf_dataset_withdemo, model_2, collate_fn
+from tqdm import tqdm
+import wandb
 
 def analysis_cluster_number_byclustering(data_cur, num_clusters, if_check, varname):
     data_C = data_cur.C
@@ -277,11 +104,7 @@ def update_curset_pred_C_and_repD0420(args, model, data_cur, dataloader_cur, var
     # update date_cur.rep
     final_embed = torch.randn(len(data_cur), args.n_hidden_fea, dtype=torch.float)
     model.eval()
-    for batch_idx, (index, batch_xvy, batch_c) in enumerate(dataloader_cur):
-        data_x, data_v, target = batch_xvy
-        data_x = torch.autograd.Variable(data_x)
-        data_v = torch.autograd.Variable(data_v)
-        target = torch.autograd.Variable(target)
+    for batch_idx, (idx, data_x, data_v, target, batch_c) in enumerate(tqdm(dataloader_cur)):
 
         if args.cuda:
             data_x = data_x.cuda()
@@ -290,7 +113,8 @@ def update_curset_pred_C_and_repD0420(args, model, data_cur, dataloader_cur, var
 
         encoded_x, decoded_x, output_c_no_activate, output_outcome = model(x=data_x, function="outcome_logistic_regression", demov=data_v)
         embed = encoded_x.data.cpu()
-        final_embed[index] = embed
+        for l in idx:
+            final_embed[l.item()]=embed[l.item() % len(embed)]
 
     data_cur.rep = final_embed 
     representations = data_cur.rep
@@ -316,18 +140,22 @@ def calculate_cluster_metrics(data_train):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='ppd-aware clustering')
+    parser.add_argument('--run_name', type=str, default=None, required=True,
+                        help='wandb run name')
     parser.add_argument('--training_output_path', type=str, required=True,
                         help='location of training output')
     parser.add_argument('--n_hidden_fea', type=int, required=True,
                         help='number of hidden size in LSTM')
-    parser.add_argument('--input_path', type=str, required=True,
+    
+    parser.add_argument('--path_to_file_to_split', type=str, required=True,
                         help='location of input dataset')
-    parser.add_argument('--filename_train', type=str, required=True,
-                        help='location of the data corpus')
-    parser.add_argument('--filename_valid', type=str, required=True,
-                        help='filename_valid')
-    parser.add_argument('--filename_test', type=str, required=True,
-                        help='file_name_test')
+
+    parser.add_argument('--path_to_labels', type=str, required=True,
+                        help='location of labels')
+    parser.add_argument('--test_size', type=float, default=0.33, help='percentage of total size for test split')
+
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='batch size')
     parser.add_argument('--n_input_fea', type=int, required=True,
                         help='number of original input feature size')
     parser.add_argument('--n_dummy_demov_fea', type=int, required=True,
@@ -479,23 +307,64 @@ def plot_roc(labels, predict_prob):
 
     return optim_thres
 
+def compute_predictions_and_metrics(model, feature, target, split):
+
+    print("------------------------")
+    print(f"in {split} set")
+    
+    predict_results = model.predict(feature)
+    predict_prob = model.predict_proba(feature)
+    predict_prob1 = predict_prob[:,1]
+
+    fpr, tpr, thresholds = metrics.roc_curve(target, predict_prob1)
+    print("auc=",metrics.auc(fpr, tpr))
+
+    plot_roc(target, predict_prob1)
+    auc_score, message1, message2   = calculate_metrice(target, predict_prob1)
+    print("auc_score=", auc_score)
+    print("message1=", message1)
+    print("message2=", message2)
+
+    return auc_score, message1, message2
+
 
 if __name__ == '__main__':
     args = parse_args()
+
+    #seeds
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+
+    wandb.init(project='DICE', name = args.run_name, config = args)
+
     print("(K,hn)=", args.K_clusters, args.n_hidden_fea)
     n_clusters, inputnhidden = args.K_clusters, args.n_hidden_fea
     taskpath = './'
     args.input_trained_model = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) + '/model_iter.pt'
     args.input_trained_data_train = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) +'/data_train_iter.pickle'
 
-    pkl_file = open(args.input_trained_data_train, 'rb')
+    with open(args.path_to_file_to_split, 'rb') as handle:
+        table = pickle.load(handle)
+    y = pd.read_csv(args.path_to_labels)
 
-    data_train = pickle.load(pkl_file)
-    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=1, shuffle=True, drop_last=True)
-    data_test = yf_dataset_withdemo(args.input_path, args.filename_test, args.n_hidden_fea)
-    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=1, shuffle=False, drop_last=True)
-    data_valid = yf_dataset_withdemo(args.input_path, args.filename_valid, args.n_hidden_fea)
-    dataloader_valid = torch.utils.data.DataLoader(data_valid, batch_size=1, shuffle=False, drop_last=True)
+    #table = table.sample(frac=0.10, random_state=args.seed)
+    #y = y.sample(frac=0.10, random_state=args.seed)
+
+    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
+    
+    with open(args.input_trained_data_train, 'rb') as handle:
+        data_train = pickle.load(handle)
+    
+    dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    
+    data_test = yf_dataset_withdemo(X_test, y_test, args.n_hidden_fea, mode='test')
+    dataloader_test = torch.utils.data.DataLoader(data_test, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+
+    #data_valid = yf_dataset_withdemo(args.input_path, args.filename_valid, args.n_hidden_fea)
+    #dataloader_valid = torch.utils.data.DataLoader(data_valid, batch_size=1, shuffle=False, drop_last=True)
 
     model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -509,12 +378,12 @@ if __name__ == '__main__':
 
     # update the rep and c first, then calculate the result. Here we evaluate the clustering metrics on data_test.
     update_curset_pred_C_and_repD0420(args, model, data_test, dataloader_test,"data_test", data_train)
-    update_curset_pred_C_and_repD0420(args, model, data_valid, dataloader_valid,"data_valid", data_train)
+    #update_curset_pred_C_and_repD0420(args, model, data_valid, dataloader_valid,"data_valid", data_train)
     
     feature_train = data_train.rep.numpy()
     target_train = np.array(data_train.data_y)
-    feature_test = data_valid.rep.numpy()
-    target_test = np.array(data_valid.data_y)
+    feature_test = data_test.rep.numpy()#data_valid.rep.numpy()
+    target_test = np.array(data_test.data_y)#np.array(data_valid.data_y)
 
 
     # power_ = 0
@@ -523,33 +392,23 @@ if __name__ == '__main__':
     model = LogisticRegression(max_iter=200)
     model.fit(feature_train, target_train)
 
-    print("------------------------")
-    print("in train set")
-    predict_results = model.predict(feature_train)
-    predict_prob = model.predict_proba(feature_train)
-    predict_prob1 = predict_prob[:,1]
+    auc_score, message1, message2 = compute_predictions_and_metrics(model, feature_train, target_train, 'train')
+    
+    train_recording = {}
+    train_recording['train_auc'] = auc_score
+    for res in message1:
+        train_recording[f'train_optim_thres_{res}'] = message1[res]
+    for res in message2:
+        train_recording[f'train_default_thres_{res}'] = message2[res]
 
-    fpr, tpr, thresholds = metrics.roc_curve(target_train, predict_prob1)
-    print("auc=",metrics.auc(fpr, tpr))
+    auc_score, message1, message2 = compute_predictions_and_metrics(model, feature_test, target_test, 'test')
+    test_recording = {}
+    test_recording['test_auc'] = auc_score
+    for res in message1:
+        test_recording[f'test_optim_thres_{res}'] = message1[res]
+    for res in message2:
+        test_recording[f'test_default_thres_{res}'] = message2[res]
 
-    plot_roc(target_train, predict_prob1)
-    auc_score, message1, message2   = calculate_metrice(target_train, predict_prob1)
-    print("auc_score=", auc_score)
-    print("message1=", message1)
-    print("message2=", message2)
-
-
-    print("--------------------------")
-    print("in test set")
-    predict_results = model.predict(feature_test)
-    predict_prob = model.predict_proba(feature_test)
-    predict_prob1 = predict_prob[:,1]
-
-    fpr, tpr, thresholds = metrics.roc_curve(target_test, predict_prob1)
-    print("auc=",metrics.auc(fpr, tpr))
-
-    plot_roc(target_test, predict_prob1)
-    auc_score, message1, message2   = calculate_metrice(target_test, predict_prob1)
-    print("auc_score=", auc_score)
-    print("message1=", message1)
-    print("message2=", message2)
+    train_recording.update(test_recording)
+    rec_final = train_recording
+    wandb.log(rec_final)

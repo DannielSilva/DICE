@@ -39,7 +39,9 @@ import torch.nn.functional as F
 
 import pickle
 from sklearn.model_selection import train_test_split
-from tqdm.notebook import tqdm, trange
+from tqdm import tqdm, trange
+import wandb
+import json
 
 # batch shape [batch_size, 3, 3, seq_length, input_dim]
 # first 3 corresponds to number of elements returned by Dataset
@@ -72,17 +74,17 @@ class yf_dataset_withdemo(Dataset):
     def __init__(self, X, y, n_z, mode='train'):
         #import IPython; IPython.embed(); import sys; sys.exit(0)
 
-        if mode == 'test':
-            print('removing idx with nan', X.shape)
-            v = []
-            for i, x in enumerate(X['vector']):
-                if np.isnan(x).any():
-                    v.append(i)
-            # [204, 208, 389, 893] # indixes with nan
-            mapped_ids = [X.index[idx] for idx in v]
-            y_ids = [y.index[idx] for idx in v]
-            X.drop(mapped_ids, axis=0, inplace=True)
-            y.drop(y_ids, axis=0, inplace=True) #same mapping ids for y
+        #if mode == 'test':
+        print('removing idx with nan', X.shape)
+        v = []
+        for i, x in enumerate(X['vector']):
+            if torch.isnan(x).any():
+                v.append(i)
+        # [204, 208, 389, 893] # indixes with nan
+        mapped_ids = [X.index[idx] for idx in v]
+        y_ids = [y.index[idx] for idx in v]
+        X.drop(mapped_ids, axis=0, inplace=True)
+        y.drop(y_ids, axis=0, inplace=True) #same mapping ids for y
             
             #import IPython; IPython.embed(); import sys; sys.exit(0)
 
@@ -191,6 +193,7 @@ class model_2(nn.Module):
         self.linear_regression_demov = nn.Linear(self.n_dummy_demov_fea, 1)
         self.activation_regression = nn.Sigmoid()
         self.init_weights()
+        self.device = para_cuda
 
 
     def init_weights(self):
@@ -237,8 +240,8 @@ class model_2(nn.Module):
 
             # output_c dimension [batch_size, n_clusters]
             if mask_BoolTensor!=None:
-                #if self.cuda: //TOFDO
-                #    mask_BoolTensor = mask_BoolTensor.cuda()
+                if self.device:
+                   mask_BoolTensor = mask_BoolTensor.cuda()
                 output_c = output_c.masked_fill(mask = mask_BoolTensor, value=torch.tensor(0.0) )
             
             output_from_c = self.linear_regression_c(output_c)
@@ -259,6 +262,9 @@ class model_2(nn.Module):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='ppd-aware clustering')
+
+    parser.add_argument('--run_name', type=str, default=None, required=True,
+                        help='wandb run name')
 
     parser.add_argument('--init_AE_epoch', type=int, required=True,
                         help='number of epoch for representation initialization')
@@ -379,13 +385,13 @@ def test_AE(args, model, dataloader_test):
             if args.cuda:
                 data_x = data_x.cuda()
                 data_v = data_v.cuda()
-                target = target.cuda()
+                data_y = data_y.cuda()
 
             enc, pred = model(data_x, "autoencoder")
 
-            if np.isnan(enc).any():
+            if torch.isnan(enc).any():
                 encs.append({'i': idx, 'enc':enc})
-            if np.isnan(pred).any():
+            if torch.isnan(pred).any():
                 preds.append({'i': idx, 'enc':pred})
             loss = criterion_MSE(data_x, pred)
             test_error.append(loss.detach().cpu().numpy())
@@ -405,14 +411,14 @@ def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
             if args.cuda:
                 data_x = data_x.cuda()
                 data_v = data_v.cuda()
-                target = target.cuda()
+                #target = target.cuda()
 
             enc, pred = model(data_x, "autoencoder")
             
             embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
             for l in index:
-                if np.isnan(embed).any():
-                    raise ValueError("ValueError Nan embedding") #final_embed[l.item()] = torch.zeros(embed.size()[-1]) #zeros when nan :/ //TODO
+                if torch.isnan(embed).any():
+                    raise ValueError("ValueError Nan embedding")
                 else:
                     final_embed[l.item()]=embed[l.item() % len(embed)]
             #final_embed[index] = embed #np.isnan(final_embed).any()
@@ -723,6 +729,8 @@ def change_label_from_highratio_to_lowratio(args, oldlabel, data_train):
 def main(args):
     # Set the random seed manually for reproducibility.
     
+    wandb.init(project='DICE', name = args.run_name, config = args)
+    
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -734,7 +742,8 @@ def main(args):
         table = pickle.load(handle)
     y = pd.read_csv(args.path_to_labels)
 
-
+    #table = table.sample(frac=0.10, random_state=args.seed)
+    #y = y.sample(frac=0.10, random_state=args.seed)
 
     X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
     data_train = yf_dataset_withdemo(X_train, y_train, args.n_hidden_fea, mode='train')
@@ -744,7 +753,9 @@ def main(args):
     #import IPython; IPython.embed(); import sys; sys.exit(0)
 
     # Algorithm 2 model
-    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
+    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda, args.cuda)
+    wandb.watch(model, log='all')
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion_MSE = nn.MSELoss()
     criterion_BCE = nn.BCELoss()
@@ -786,7 +797,7 @@ def main(args):
             if args.cuda:
                 data_x = data_x.cuda()
                 data_v = data_v.cuda()
-                target = target.cuda()
+                #target = target.cuda()
 
             enc, pred = model(data_x, "autoencoder")
 
@@ -808,8 +819,7 @@ def main(args):
         torch.save(model.state_dict(), part1_foldername+'/AE_model_'+ str(epoch) +'.pt')
         print("    Saving AE models")
 
-    plt.plot(train_AE_loss_list, color='g')
-    plt.plot(test_AE_loss_list, color='b')
+    plt.plot(train_AE_loss_list,'g*', test_AE_loss_list, 'ro')
     plt.legend(["train_AE_loss","test_AE_loss_list"])
     plt.savefig(part1_foldername+"/part1_loss_AE.png")
     plt.close()
@@ -849,7 +859,7 @@ def main(args):
                 if args.cuda:
                     data_x = data_x.cuda()
                     data_v = data_v.cuda()
-                    target = target.cuda()
+                    #target = target.cuda()
 
                 enc, pred = model(data_x, "autoencoder")
                 embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
@@ -1045,7 +1055,9 @@ def main(args):
             iter_train_auc_list.append(train_outcome_auc_score)
             iter_test_auc_list.append(test_outcome_auc_score)
 
-            print("epoch {:2d}: train AE loss= {:.4e}, c acc= {:%}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}, classifier loss= {:.4e}, outcome loss= {:.4e}, p_value loss= {:.4e},".format(epoch, train_AE_loss, classifier_c_accuracy, train_outcome_likeilhood, train_outcome_auc_score, train_classifier_loss, train_outcome_loss, train_p_value_loss))
+            step = iter_i * args.epoch_in_iter + epoch
+
+            print("epoch {:2d}: train AE loss= {:.4e}, c acc= {:%}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}, classifier loss= {:.4e}, outcome loss= {:.4e}, p_value loss= {:.4e},".format(step, train_AE_loss, classifier_c_accuracy, train_outcome_likeilhood, train_outcome_auc_score, train_classifier_loss, train_outcome_loss, train_p_value_loss))
             print("        : test  AE loss= {:.4e}, c acc= {:%}, outcome nll= {:.4e}, outcome_auc_score= {:.4e}".format(test_AE_loss, test_classifier_c_accuracy, test_outcome_likelihood, test_outcome_auc_score))
 
 
@@ -1058,6 +1070,7 @@ def main(args):
             for item in dict_p_value_list:
                 if item>0.05:
                     flag_morethan_0p05 = 1 
+            p_value_register = 0
             if (test_outcome_likelihood < min_test_negloglikeli_record) and (flag_morethan_0p05==0):
                 print("save model here! iter_i={}, epoch={}".format(iter_i, epoch))
                 min_test_negloglikeli_record = test_outcome_likelihood
@@ -1070,7 +1083,33 @@ def main(args):
 
                 saved_iter_list.append(iter_i)
 
-                saved_iter = iter_i 
+                saved_iter = iter_i
+
+                p_value_register = 1
+            
+            with open(part2_foldername+'/auc_score_dim_step_'+str(step)+'.json', 'w') as f:
+                json.dump({
+                    'n_hidden_fea': args.n_hidden_fea,
+                    'p-value': p_value_register,
+                    'train_outcome_auc_score': train_outcome_auc_score,
+                    'test_outcome_auc_score': test_outcome_auc_score
+                }, f)
+
+            wandb.log({
+                'p-value': p_value_register,
+                'train_AE_loss': train_AE_loss, 
+                'classifier_c_accuracy': classifier_c_accuracy, 
+                'train_outcome_likeilhood': train_outcome_likeilhood, 
+                'train_outcome_auc_score': train_outcome_auc_score, 
+                'train_classifier_loss': train_classifier_loss, 
+                'train_outcome_loss': train_outcome_loss, 
+                'train_p_value_loss': train_p_value_loss,
+                'test_AE_loss': test_AE_loss, 
+                'test_classifier_c_accuracy': test_classifier_c_accuracy, 
+                'test_outcome_likelihood': test_outcome_likelihood, 
+                'test_outcome_auc_score': test_outcome_auc_score
+
+            })
 
     print("number_reassign_list=",number_reassign_list)
 
