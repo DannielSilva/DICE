@@ -42,7 +42,8 @@ from sklearn.metrics import auc, roc_auc_score, roc_curve
 from tqdm import tqdm
 from DICE import yf_dataset_withdemo, model_2, func_analysis_test_error_D0406, collate_fn, update_M
 import pickle
-from sklearn.model_selection import train_test_split
+import wandb
+from autoencoder_builder import get_auto_encoder, AutoEncoderEnum
 
 def parse_args():
     # begin main function
@@ -64,9 +65,10 @@ def parse_args():
     parser.add_argument('--test_size', type=float, default=0.33, help='percentage of total size for test split')
 
     
-    parser.add_argument('--training_output_path', type=str, required=True,
+    parser.add_argument('--training_output_path', type=str, required=True, default="./",
                         help='location of training output')
-    
+    parser.add_argument('--autoencoder_type', type=str, default=AutoEncoderEnum.ORIGINAL_DICE.value, required=False, choices=[i.value.lower() for i in AutoEncoderEnum],
+                        help='auto encoder architecture')
     parser.add_argument('--n_input_fea', type=int, required=True,
                         help='number of original input feature size')
 
@@ -90,7 +92,7 @@ def parse_args():
     parser.add_argument('--epoch_in_iter', type=int, default=1,
                         help='maximum of iterations in iteration merge clusters')
     
-    parser.add_argument('--seed', type=int, default=1111,
+    parser.add_argument('--seed', type=int, default=42,
                         help='random seed')
     parser.add_argument('--input_trained_data_train', type=str, required=False,
                         help='location of the data corpus')
@@ -303,13 +305,14 @@ def analysis_architecture(args, inputmodelpath, inputdatatrainpath, inputnhidden
     
 
     # Algorithm 2 model
-    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
+    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda, args.autoencoder_type)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     if args.cuda:
         model = model.cuda()
 
     device = torch.device("cpu")
+    #import IPython; IPython.embed(); exit(0)
     model.load_state_dict(torch.load(args.input_trained_model, map_location=device))
     # model.to(device)
     train_AE_loss, _, train_outcome_likelihood, train_outcome_auc_score = func_analysis_test_error_D0406(args, model, data_train, dataloader_train)
@@ -347,7 +350,7 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
 
-    path = "./" 
+    path = args.training_output_path 
     files= os.listdir(path) 
     s = []
     record = [] 
@@ -375,7 +378,7 @@ if __name__ == '__main__':
     list_tuple_k_hn_iter_dict_outcome_ratio_train = []
     for item in record:
         n_clusters, inputnhidden, epoch = item
-        taskpath = './'
+        taskpath = args.training_output_path #'./'
         inputmodelpath = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) + '/model_iter.pt'
         inputdatatrainpath = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) +'/data_train_iter.pickle'
         data_train, data_test, trainx, trainy, trainc, dict_outcome_ratio_train, dict_c_count,test_outcome_likelihood, test_outcome_auc_score = analysis_architecture(args, inputmodelpath, inputdatatrainpath, inputnhidden,n_clusters) #, valid_outcome_likelihood, valid_outcome_auc_score

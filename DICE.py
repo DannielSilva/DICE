@@ -43,6 +43,8 @@ from tqdm import tqdm, trange
 import wandb
 import json
 
+from autoencoder_builder import get_auto_encoder, AutoEncoderEnum
+
 # batch shape [batch_size, 3, 3, seq_length, input_dim]
 # first 3 corresponds to number of elements returned by Dataset
 # second 3 corresponds to size of list [data_x, data_v, data_y]
@@ -111,71 +113,9 @@ class yf_dataset_withdemo(Dataset):
         #import IPython; IPython.embed(); exit(0)
         return torch.tensor(idx, dtype = torch.long), self.data_x[idx].float(), torch.tensor(self.data_v[idx], dtype = torch.float32), torch.tensor(self.data_y[idx], dtype = torch.float32), self.C[idx]
 
-class EncoderRNN(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout, cuda):
-        super(EncoderRNN, self).__init__()
-        self.nhidden = nhidden
-        self.feasize = input_size
-        self.nlayers = nlayers
-        self.dropout = dropout
-        self.cuda = cuda 
-        self.lstm = nn.LSTM(input_size=self.feasize,
-                               hidden_size=self.nhidden,
-                               num_layers=self.nlayers,
-                               dropout=self.dropout,
-                               batch_first=True)
-        self.init_weights()
-
-    def init_weights(self):
-        #nn.init.orthogonal_(self.lstm.weight_ih_l0, gain=np.sqrt(2))
-        for p in self.lstm.parameters():
-            p.data.uniform_(-0.1, 0.1)
-
-    def forward(self, x):
-        batch_size = x.size()[0]
-        output, state = self.lstm(x) #output [batch_size, seq_size, hidden_size]
-        hn, cn = state
-        #hidden = hidden_state[-1]  # get hidden state of last layer of encoder
-        output = torch.flip(output, [1])
-        newinput = torch.flip(x,[1])        
-        zeros = torch.zeros(batch_size, 1, x.shape[-1]) #zeros = torch.zeros(batch_size, 1, x.shape[-1])
-        if self.cuda:
-            zeros = zeros.cuda()
-        newinput = torch.cat((zeros, newinput),1)
-        newinput = newinput[:, :-1, :]
-        #import IPython; IPython.embed(); import sys; sys.exit(0)
-        #print("output.size()=",output.size()) # output.size()= torch.Size([1, 10, 100])
-        #print("hn.size()=",hn.size()) # hn.size()= torch.Size([1, 1, 100])
-        #print("hn=",hn)
-        #print("output[0]=",output[0])
-        return output, (hn, cn), newinput
-
-class DecoderRNN(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout):
-        super(DecoderRNN, self).__init__()
-        self.nhidden = nhidden
-        self.feasize = input_size
-        self.nlayers = nlayers
-        self.dropout = dropout
-        self.lstm = nn.LSTM(input_size=self.feasize,
-                               hidden_size=self.nhidden,
-                               num_layers=self.nlayers,
-                               dropout=self.dropout,
-                               batch_first=True)
-        self.init_weights()
-
-    def init_weights(self):
-        #nn.init.orthogonal_(self.lstm.weight_ih_l0, gain=np.sqrt(2))
-        for p in self.lstm.parameters():
-            p.data.uniform_(-0.1, 0.1)
-
-    def forward(self, x, h):
-        output, state = self.lstm(x, h)
-        fin = torch.flip(output, [1])
-        return fin
 
 class model_2(nn.Module):
-    def __init__(self, input_size, nhidden, nlayers, dropout, n_clusters, n_dummy_demov_fea, para_cuda):
+    def __init__(self, input_size, nhidden, nlayers, dropout, n_clusters, n_dummy_demov_fea, para_cuda, autoencoder_type):
         super(model_2, self).__init__()
         self.nhidden = nhidden
         self.input_size = input_size
@@ -184,8 +124,7 @@ class model_2(nn.Module):
         self.n_clusters = n_clusters
         self.n_dummy_demov_fea = n_dummy_demov_fea
         self.para_cuda = para_cuda
-        self.encoder = EncoderRNN(self.input_size, self.nhidden, self.nlayers, self.dropout, self.para_cuda)
-        self.decoder = DecoderRNN(self.input_size, self.nhidden, self.nlayers, self.dropout)
+        self.autoencoder = get_auto_encoder(autoencoder_type,input_size, nhidden, nlayers, dropout, para_cuda)
         self.linear_decoder_output = nn.Linear(self.nhidden, self.input_size)
         self.linear_classifier_c = nn.Linear(self.nhidden, self.n_clusters) 
         self.activateion_classifier = nn.Softmax(dim=1)
@@ -217,8 +156,7 @@ class model_2(nn.Module):
         mask_index: list() of index. 
         '''
         if function =="autoencoder":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            decoded_x = self.decoder(newinput, (hn, cn))
+            encoded_x, decoded_x = self.autoencoder(x)
             decoded_x = self.linear_decoder_output(decoded_x)
             return encoded_x, decoded_x
         elif function == "get_representation":
@@ -230,11 +168,10 @@ class model_2(nn.Module):
             output = self.activateion_classifier(output)
             return encoded_x, output 
         elif function == "outcome_logistic_regression":
-            encoded_x, (hn, cn), newinput = self.encoder(x)
-            decoded_x = self.decoder(newinput, (hn, cn))
+            encoded_x, decoded_x = self.autoencoder(x)
             decoded_x = self.linear_decoder_output(decoded_x)
             
-            encoded_x = encoded_x.mean(1)#encoded_x[:,0,:]
+            #encoded_x = encoded_x.mean(1)#encoded_x[:,0,:]
             output_c_no_activate = self.linear_classifier_c(encoded_x)
             output_c = self.activateion_classifier(output_c_no_activate)
 
@@ -265,6 +202,8 @@ def parse_args():
 
     parser.add_argument('--run_name', type=str, default=None, required=True,
                         help='wandb run name')
+    parser.add_argument('--autoencoder_type', type=str, default=AutoEncoderEnum.ORIGINAL_DICE.value, required=False, choices=[i.value.lower() for i in AutoEncoderEnum],
+                        help='auto encoder architecture')
 
     parser.add_argument('--init_AE_epoch', type=int, required=True,
                         help='number of epoch for representation initialization')
@@ -272,7 +211,7 @@ def parse_args():
     parser.add_argument('--n_hidden_fea', type=int, required=True,
                         help='number of hidden size in LSTM')
 
-    parser.add_argument('--output_path', type=str, required=False,
+    parser.add_argument('--output_path', type=str, required=False, default='./',
                         help='location of output path')
 
     parser.add_argument('--path_to_file_to_split', type=str, required=True,
@@ -415,7 +354,7 @@ def update_testset_R_C_M_K(args, model, data_test, dataloader_test, data_train):
 
             enc, pred = model(data_x, "autoencoder")
             
-            embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
+            embed = enc.detach().cpu()#.mean(1)#enc.detach().cpu()[:,0,:]
             for l in index:
                 if torch.isnan(embed).any():
                     raise ValueError("ValueError Nan embedding")
@@ -753,7 +692,7 @@ def main(args):
     #import IPython; IPython.embed(); import sys; sys.exit(0)
 
     # Algorithm 2 model
-    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda, args.cuda)
+    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda, args.autoencoder_type)
     wandb.watch(model, log='all')
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -772,7 +711,7 @@ def main(args):
     #print("/////////////////////////////////////////////////////////////////////////////")
     print("part 1: train AE and for representation initialization")
 
-    args.output_path = "./hn_"+str(args.n_hidden_fea)+"_K_"+str(args.K_clusters)
+    args.output_path = args.output_path + "hn_"+str(args.n_hidden_fea)+"_K_"+str(args.K_clusters)
     if os.path.isdir(args.output_path):
         shutil.rmtree(args.output_path)
     os.makedirs(args.output_path)
@@ -862,12 +801,13 @@ def main(args):
                     #target = target.cuda()
 
                 enc, pred = model(data_x, "autoencoder")
-                embed = enc.detach().cpu().mean(1)#enc.detach().cpu()[:,0,:]
+                embed = enc.detach().cpu()#.mean(1)#enc.detach().cpu()[:,0,:]
                 #import IPython; IPython.embed(); exit(0)
                 for l in index:
                     #print('l',l)
                     final_embed[l.item()]=embed[l.item() % len(embed)]
-
+        print('len(index)',len(index))
+        #import IPython; IPython.embed(); exit(0)
         #final_embed = np.vstack(embedding_list)
         final_embed = final_embed.numpy()
         #print("final_embed.shape=",final_embed.shape)

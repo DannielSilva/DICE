@@ -52,6 +52,7 @@ from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score
 
 from DICE import yf_dataset_withdemo, model_2, collate_fn
+from autoencoder_builder import get_auto_encoder, AutoEncoderEnum
 from tqdm import tqdm
 import wandb
 
@@ -153,7 +154,8 @@ def parse_args():
     parser.add_argument('--path_to_labels', type=str, required=True,
                         help='location of labels')
     parser.add_argument('--test_size', type=float, default=0.33, help='percentage of total size for test split')
-
+    parser.add_argument('--autoencoder_type', type=str, default=AutoEncoderEnum.ORIGINAL_DICE.value, required=False, choices=[i.value.lower() for i in AutoEncoderEnum],
+                        help='auto encoder architecture')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='batch size')
     parser.add_argument('--n_input_fea', type=int, required=True,
@@ -166,7 +168,7 @@ def parse_args():
     parser.add_argument('--lstm_dropout', type=float, default=0.0, help='dropout in LSTM')
     parser.add_argument('--K_clusters', type=int, required=True,
                         help='number of initial clusters')
-    parser.add_argument('--seed', type=int, default=1111,
+    parser.add_argument('--seed', type=int, default=42,
                         help='random seed')
     parser.add_argument('--input_trained_data_train', type=str, required=False,
                         help='location of the data corpus')
@@ -342,7 +344,7 @@ if __name__ == '__main__':
 
     print("(K,hn)=", args.K_clusters, args.n_hidden_fea)
     n_clusters, inputnhidden = args.K_clusters, args.n_hidden_fea
-    taskpath = './'
+    taskpath = args.training_output_path
     args.input_trained_model = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) + '/model_iter.pt'
     args.input_trained_data_train = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) +'/data_train_iter.pickle'
 
@@ -366,7 +368,7 @@ if __name__ == '__main__':
     #data_valid = yf_dataset_withdemo(args.input_path, args.filename_valid, args.n_hidden_fea)
     #dataloader_valid = torch.utils.data.DataLoader(data_valid, batch_size=1, shuffle=False, drop_last=True)
 
-    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda)
+    model = model_2(args.n_input_fea, args.n_hidden_fea, args.lstm_layer, args.lstm_dropout, args.K_clusters, args.n_dummy_demov_fea, args.cuda, args.autoencoder_type)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     #print(model)

@@ -114,7 +114,7 @@ def parse_args():
     parser.add_argument('--lstm_dropout', type=float, default=0.0, help='dropout in LSTM')
     parser.add_argument('--K_clusters', type=int, required=True,
                         help='number of initial clusters')
-    parser.add_argument('--seed', type=int, default=1111,
+    parser.add_argument('--seed', type=int, default=42,
                         help='random seed')
     parser.add_argument('--input_trained_data_train', type=str, required=False,
                         help='location of the data corpus')
@@ -138,7 +138,7 @@ if __name__ == '__main__':
 
     print("(K,hn)=", args.K_clusters, args.n_hidden_fea)
     n_clusters, inputnhidden = args.K_clusters, args.n_hidden_fea
-    taskpath = './'
+    taskpath = args.training_output_path
     args.input_trained_model = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) + '/model_iter.pt'
     args.input_trained_data_train = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) +'/data_train_iter.pickle'
 
