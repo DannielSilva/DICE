@@ -1,9 +1,10 @@
 #!/bin/bash
 
-training_output_path="original/" #dont forget the bar
-K_clusters=3
-n_hidden_fea=60
+training_output_path="original-icd9/" #dont forget the bar
+K_clusters=4
+n_hidden_fea=90
 autoencoder_type='original'
-run_name='original-coutcome-prediction'
+run_name='original-icd9-coutcome-prediction'
+data_path='../data-icd9/'
 
-python outcome_prediction.py --run_name=$run_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --path_to_file_to_split='../diabetes_processedFeats_orderedSeqLength.pickle' --path_to_labels='../y_diabetes.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters $K_clusters --n_hidden_fea $n_hidden_fea --autoencoder_type=$autoencoder_type
+python outcome_prediction.py --run_name=$run_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --path_to_data_test=$data_path'data_test_11_fp32.pickle' --path_to_labels_test=$data_path'y_test_11_fp32.pickle' --n_dummy_demov_fea 2 --K_clusters $K_clusters --n_hidden_fea $n_hidden_fea --autoencoder_type=$autoencoder_type

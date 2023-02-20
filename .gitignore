@@ -7,3 +7,8 @@ run_DICE_k*
 NAS_DICE.logging
 clustering-metrics-1.json
 tsne_3d.png
+*.gz
+*-checkpoint.ipynb
+tsne_*.png
+mapping.png
+cluster_analysis*

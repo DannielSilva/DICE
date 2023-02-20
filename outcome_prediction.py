@@ -1,47 +1,23 @@
 #!/usr/bin/env python
 import numpy as np 
 import pickle
-from sklearn.model_selection import train_test_split
-from sklearn.cluster import KMeans
-from sklearn.manifold import TSNE
-import seaborn as sns
-import scipy.spatial as sp, scipy.cluster.hierarchy as hc
 import torch
-from torch.utils.data import *
-from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
-from torch.optim import lr_scheduler 
 import torch.optim as optim 
-
-import torch.nn as nn
-import torch.nn.functional as F
 
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
 
-import matplotlib 
-from matplotlib import pyplot
 import matplotlib.pyplot as plt 
 import argparse
-import os 
-import shutil
 import random
-from sklearn.cluster import AgglomerativeClustering
-import math
 
-from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss
-from scipy.stats import chi2
 import pandas as pd
-import statsmodels.api as sm
 import numpy as np 
-import statsmodels.api as sm
-from sklearn.metrics import auc, roc_auc_score, roc_curve
 
-from mpl_toolkits.mplot3d import Axes3D
+from sklearn.metrics import auc, roc_curve
+
 import matplotlib.pyplot as plt
-from sklearn import manifold, datasets
 from sklearn import metrics
 
 
@@ -52,7 +28,7 @@ from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score
 
 from DICE import yf_dataset_withdemo, model_2, collate_fn
-from autoencoder_builder import get_auto_encoder, AutoEncoderEnum
+from autoencoder_builder import AutoEncoderEnum
 from tqdm import tqdm
 import wandb
 
@@ -148,18 +124,15 @@ def parse_args():
     parser.add_argument('--n_hidden_fea', type=int, required=True,
                         help='number of hidden size in LSTM')
     
-    parser.add_argument('--path_to_file_to_split', type=str, required=True,
+    parser.add_argument('--path_to_data_test', type=str, required=True,
                         help='location of input dataset')
-
-    parser.add_argument('--path_to_labels', type=str, required=True,
-                        help='location of labels')
+    parser.add_argument('--path_to_labels_test', type=str, required=True,
+                        help='location of input dataset')
     parser.add_argument('--test_size', type=float, default=0.33, help='percentage of total size for test split')
     parser.add_argument('--autoencoder_type', type=str, default=AutoEncoderEnum.ORIGINAL_DICE.value, required=False, choices=[i.value.lower() for i in AutoEncoderEnum],
                         help='auto encoder architecture')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='batch size')
-    parser.add_argument('--n_input_fea', type=int, required=True,
-                        help='number of original input feature size')
     parser.add_argument('--n_dummy_demov_fea', type=int, required=True,
                         help='number of dummy demo feature size')
     parser.add_argument('--lstm_layer', type=int, default=1,
@@ -329,6 +302,8 @@ def compute_predictions_and_metrics(model, feature, target, split):
 
     return auc_score, message1, message2
 
+#import os
+#os.environ["CUDA_VISIBLE_DEVICES"]="5"
 
 if __name__ == '__main__':
     args = parse_args()
@@ -348,17 +323,14 @@ if __name__ == '__main__':
     args.input_trained_model = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) + '/model_iter.pt'
     args.input_trained_data_train = taskpath + 'hn_'+str(inputnhidden) +'_K_'+str(n_clusters)+'/part2_AE_nhidden_' + str(inputnhidden) +'/data_train_iter.pickle'
 
-    with open(args.path_to_file_to_split, 'rb') as handle:
-        table = pickle.load(handle)
-    y = pd.read_csv(args.path_to_labels)
-
-    #table = table.sample(frac=0.10, random_state=args.seed)
-    #y = y.sample(frac=0.10, random_state=args.seed)
-
-    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
+    X_test = pd.read_pickle(args.path_to_data_test)
+    y_test = pd.read_pickle(args.path_to_labels_test)
     
     with open(args.input_trained_data_train, 'rb') as handle:
         data_train = pickle.load(handle)
+
+    args.n_input_fea = data_train.data_x[0].shape[1]
+    print('hidden features:', args.n_input_fea )
     
     dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
     

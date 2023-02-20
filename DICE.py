@@ -1,44 +1,30 @@
 # end-to-end code 
 import numpy as np 
 import pickle
-from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
-from sklearn.manifold import TSNE
-import seaborn as sns
-import scipy.spatial as sp, scipy.cluster.hierarchy as hc
 import torch
-from torch.utils.data import *
-from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
-from torch.optim import lr_scheduler 
+from torch.utils.data import Dataset
 import torch.optim as optim 
 
 import torch.nn as nn
 import torch.nn.functional as F
 
-import matplotlib 
 import matplotlib.pyplot as plt 
 import argparse
 import os 
 import shutil
 import random
-from sklearn.cluster import AgglomerativeClustering
-import math
 
-from sklearn.datasets import load_iris
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 from scipy.stats import chi2
 import pandas as pd
-import statsmodels.api as sm
 import numpy as np 
 import statsmodels.api as sm
-from sklearn.metrics import auc, roc_auc_score, roc_curve
+from sklearn.metrics import roc_auc_score
 
-import torch.nn.functional as F
 
 import pickle
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm, trange
 import wandb
 import json
@@ -77,7 +63,7 @@ class yf_dataset_withdemo(Dataset):
         #import IPython; IPython.embed(); import sys; sys.exit(0)
 
         #if mode == 'test':
-        print('removing idx with nan', X.shape)
+        print('removing idx with nan', X.shape, mode)
         v = []
         for i, x in enumerate(X['vector']):
             if torch.isnan(x).any():
@@ -88,7 +74,6 @@ class yf_dataset_withdemo(Dataset):
         X.drop(mapped_ids, axis=0, inplace=True)
         y.drop(y_ids, axis=0, inplace=True) #same mapping ids for y
             
-            #import IPython; IPython.embed(); import sys; sys.exit(0)
 
 
         self.n_z = n_z   
@@ -102,7 +87,7 @@ class yf_dataset_withdemo(Dataset):
 
         self.data_x = np.array(X['vector'])
         self.data_v = np.array(torch.Tensor(X[['IDADE', 'GENERO']].values))
-        self.data_y = np.array(torch.Tensor(y['y_final'].values))
+        self.data_y = np.array(torch.Tensor(y.values))
         
 
         self.mylength = len(self.data_x)
@@ -214,14 +199,19 @@ def parse_args():
     parser.add_argument('--output_path', type=str, required=False, default='./',
                         help='location of output path')
 
-    parser.add_argument('--path_to_file_to_split', type=str, required=True,
+    parser.add_argument('--path_to_data_train', type=str, required=True,
+                        help='location of input dataset')
+    parser.add_argument('--path_to_labels_train', type=str, required=True,
+                        help='location of input dataset')
+    parser.add_argument('--path_to_data_test', type=str, required=True,
+                        help='location of input dataset')
+    parser.add_argument('--path_to_labels_test', type=str, required=True,
                         help='location of input dataset')
 
-    parser.add_argument('--path_to_labels', type=str, required=True,
-                        help='location of labels')
+    
 
 
-    parser.add_argument('--n_input_fea', type=int, required=True,
+    parser.add_argument('--n_input_fea', type=int, default=None,
                         help='number of original input feature size')
 
     parser.add_argument('--n_dummy_demov_fea', type=int, required=True,
@@ -667,24 +657,38 @@ def change_label_from_highratio_to_lowratio(args, oldlabel, data_train):
 
 def main(args):
     # Set the random seed manually for reproducibility.
-    
+    #import IPython; IPython.embed(); import sys; sys.exit(0)
+    #print('000')
     wandb.init(project='DICE', name = args.run_name, config = args)
+    #print('001')
     
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
+    # random.seed(args.seed)
+    # print('002')
+    # np.random.seed(args.seed)
+    # print('003')
+    # torch.manual_seed(args.seed)
+    # print('004')
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed(args.seed)
+    # print('005')
 
     # load data
-    with open(args.path_to_file_to_split, 'rb') as handle:
-        table = pickle.load(handle)
-    y = pd.read_csv(args.path_to_labels)
 
     #table = table.sample(frac=0.10, random_state=args.seed)
     #y = y.sample(frac=0.10, random_state=args.seed)
+    print('reading')
+    X_train = pd.read_pickle(args.path_to_data_train)
+    print('X_train done')
+    y_train = pd.read_pickle(args.path_to_labels_train)
+    print('y_train done')
+    X_test = pd.read_pickle(args.path_to_data_test)
+    print('X_test done')
+    y_test = pd.read_pickle(args.path_to_labels_test)
+    print('y_test done')
+    
+    args.n_input_fea = X_train['vector'][0].shape[1]
+    print('hidden features:', args.n_input_fea )
 
-    X_train, X_test, y_train, y_test = train_test_split(table, y, test_size=args.test_size, random_state=args.seed, shuffle=False)
     data_train = yf_dataset_withdemo(X_train, y_train, args.n_hidden_fea, mode='train')
     dataloader_train = torch.utils.data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
     data_test = yf_dataset_withdemo(X_test, y_test, args.n_hidden_fea, mode='test')
@@ -1063,6 +1067,8 @@ def main(args):
     print("saved_iter_list=",saved_iter_list)
     print("saved_iter = ", saved_iter)
     
+#import os
+#os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 if __name__ == '__main__':
     args = parse_args()
