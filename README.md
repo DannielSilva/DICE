@@ -1,6 +1,5 @@
-## Our Paper Title
 
-This repository is the implementation of "DICE: Deep Significance Clustering for
+This repository is an extension of "DICE: Deep Significance Clustering for
 Outcome-Driven Stratification". 
 
 
@@ -35,13 +34,15 @@ To train the model(s) in the paper, run the following commands:
 
 Here in each bash file, we train the model with fixed K (number of clusters) and n_hidden_fea ( dimension of representation), that is: 
 ```
-python DICE.py --run_name="n_hidden_fea $n_hidden_fea for $K" --cuda 1 --batch_size=4 --init_AE_epoch 1 --n_hidden_fea  $n_hidden_fea --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv' --n_input_fea 3035 --n_dummy_demov_fea 2 --lstm_layer 1 --lr 0.0001 --K_clusters 2 --iter 60 --epoch_in_iter 1 --lambda_AE 1.0 --lambda_classifier 1.0 --lambda_outcome 10.0 --lambda_p_value 1.0 --output_path=$output_path --autoencoder_type=$autoencoder_type > $output_path/k2hn$n_hidden_fea.log
+python DICE.py --run_name="n_hidden_fea $n_hidden_fea for k2" --cuda 1 --batch_size=30 --init_AE_epoch 1 --n_hidden_fea  $n_hidden_fea --path_to_data_train='data_train.pickle' --path_to_data_test='data_test.pickle' --path_to_labels_train='y_train.pickle' --path_to_labels_test='y_test.pickle' --n_dummy_demov_fea 2 --lstm_layer 1 --lr 0.0001 --K_clusters 2 --iter 60 --epoch_in_iter 1 --lambda_AE 1.0 --lambda_classifier 1.0 --lambda_outcome 10.0 --lambda_p_value 1.0 --output_path=$output_path --autoencoder_type=$autoencoder_type > $output_path/k2hn$n_hidden_fea.log
 ```
 Parameters:
 ```
       --run_name : wandb run name
-      --path_to_file_to_split : data file with data to split in train and test splits
-      --path_to_labels : path to label csv
+      --path_to_data_train: path to data for training split 
+      --path_to_labels_train: path to labels of train split.
+      --path_to_data_test: path to data for test split. 
+      --path_to_labels_test: path to labels of test split.
       --init_AE_epoch: epoch for the representation initialization by AutoEncoder
       --n_hidden_fea: the dimension for representation, hn for short in the below content
       --n_input_fea: dimension of input file features 
@@ -73,13 +74,13 @@ After training, we do the neural architecture search based on the AUC score on v
 which contains:
 
 ``` architecture_search
-python NAS_DICE.py --cuda 1 --batch_size=4 --training_output_path $training_output_path --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --autoencoder_type=$autoencoder_type
+python NAS_DICE.py --run_name=$run_name --cuda 1 --batch_size=16 --training_output_path=$training_output_path --path_to_data_test='data_test.pickle' --path_to_labels_test='y_test.pickle' --n_dummy_demov_fea 2 --autoencoder_type=$autoencoder_type
 ```
 Parameters:
 ```
       --run_name : wandb run name
-      --path_to_file_to_split : data file with data to split in train and test splits
-      --path_to_labels : path to label csv
+      --path_to_data_test: path to data for test split. 
+      --path_to_labels_test: path to labels of test split.
       --training_output_path: path of training output 
       --n_input_fea: dimension of input file features 
       --n_dummy_demov_fea: number of features of v (dummy features of demographics)
@@ -100,19 +101,17 @@ final search result based on the maximum AUC score on validation set, K=4, hn=35
 which contains:
 
 ```visualization
-python representation_visualization.py --image_name=$image_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --training_output_path $training_output_path --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80
+python representation_visualization.py --image_name=$image_name --training_output_path=$training_output_path --cuda 1 --K_clusters $K_clusters --n_hidden_fea $n_hidden_fea --tsne_components=$tsne_components
 ```
 Parameters: 
 ```
-      --image_name: representation image file name
+
       --training_output_path: path of training output
       --image_name : output image name
-      --path_to_file_to_split : data file with data to split in train and test splits
-      --path_to_labels : path to label csv
-      --n_input_fea: dimension of input file features 
       --n_dummy_demov_fea: number of features of v (dummy features of demographics) 
       --K_clusters: number of clusters
       --n_hidden_fea: the dimension for representation
+      --tsne_components: number of components for t-sne dimension reduction
 ```
 Output: Figure named after args.image_name.</br>
 
@@ -123,13 +122,11 @@ Output: Figure named after args.image_name.</br>
 ```
 which contains:
 ```clustering
-python clustering_metrics.py --run_name=$run_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../all_data.pickle' --path_to_labels='../y.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80 --autoencoder_type=$autoencoder_type
+python clustering_metrics.py --run_name=$run_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --path_to_data_test='data_test.pickle' --path_to_labels_test='y_test.pickle' --n_dummy_demov_fea 2 --K_clusters $K_clusters --n_hidden_fea $n_hidden_fea --autoencoder_type=$autoencoder_type
 ```
 Parameters: 
-```
-      --autoencoder_type: if original DICE or other
-``` 
-The rest is the same as the former subsection. </br>
+
+The same as the former subsection. </br>
 Output: Silhouette score, Calinski-Harabasz score, Davies_Bouldin score. </br>
 
 
@@ -139,7 +136,7 @@ Output: Silhouette score, Calinski-Harabasz score, Davies_Bouldin score. </br>
 ```
 which contains:
 ``` outcome_prediction 
-python outcome_prediction.py --run_name='outcome-prediction' --training_output_path=$training_output_path --cuda 1 --batch_size=4 --training_output_path "./" --path_to_file_to_split='../diabetes_processedFeats_orderedSeqLength.pickle' --path_to_labels='../y_diabetes.csv'  --n_input_fea 3035 --n_dummy_demov_fea 2 --K_clusters 2 --n_hidden_fea 80 --autoencoder_type=$autoencoder_type
+python outcome_prediction.py --run_name=$run_name --training_output_path=$training_output_path --cuda 1 --batch_size=4 --path_to_data_test='data_test.pickle' --path_to_labels_test='y_test.pickle' --n_dummy_demov_fea 2 --K_clusters $K_clusters --n_hidden_fea $n_hidden_fea --autoencoder_type=$autoencoder_type
 ```
 Parameters: the same as the former subsection. </br>
 Output: AUC, ACC, FPR, TPR, FNR, TNR, PPV, NPV. </br>
