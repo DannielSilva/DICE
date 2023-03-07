@@ -22,6 +22,8 @@ from sklearn.metrics import auc, roc_auc_score, roc_curve
 import matplotlib.pyplot as plt
 from sklearn import manifold, datasets
 
+from DICE import yf_dataset_withdemo
+
 # def analysis_cluster_number_byclustering(data_cur, num_clusters, if_check, varname):
 #     data_C = data_cur.C
 #     data_v = data_cur.data_v
@@ -74,10 +76,11 @@ def analysis_cluster_number_byclustering(data_cur, num_clusters, if_check, varna
     for c,y in zip(c_arr, y_arr):
         if y ==1:
             d_c[c] +=1
-    dict_outcome_ratio = d_c
+    dict_outcome = d_c
 
     unique, counts = np.unique(c_arr, return_counts=True)
     dict_c_count = {c:cnt for c,cnt in zip(unique,counts)}
+    dict_outcome_ratio = {c:dict_outcome[c] / dict_c_count[c] for c in dict_c_count}
     return dict_outcome_ratio, dict_c_count
 
 def parse_args():
@@ -118,11 +121,11 @@ if __name__ == '__main__':
     args = parse_args()
 
     #seeds
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
+    # random.seed(args.seed)
+    # np.random.seed(args.seed)
+    # torch.manual_seed(args.seed)
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed(args.seed)
 
     print("(K,hn)=", args.K_clusters, args.n_hidden_fea)
     n_clusters, inputnhidden = args.K_clusters, args.n_hidden_fea
@@ -132,16 +135,17 @@ if __name__ == '__main__':
 
     with open(args.input_trained_data_train, 'rb') as handle:
         data_train = pickle.load(handle)
-    #import IPython; IPython.embed(); import sys; sys.exit(0)
     dict_outcome_ratio_train, dict_c_count = analysis_cluster_number_byclustering(data_train, n_clusters, 0, "train")
     print(dict_outcome_ratio_train, dict_c_count)
     X, y, c = data_train.rep.numpy(), data_train.data_y, data_train.C
+    import IPython; IPython.embed()
     
     print('tsne cmomp=', args.tsne_components)
     tsne = manifold.TSNE(n_components=args.tsne_components, random_state=888)
     X_tsne = tsne.fit_transform(X)
     print("X.shape=", X.shape)
     print("X_tsne.shape=", X_tsne.shape)
+    total = X.shape[0]
 
     x_min, x_max = X_tsne.min(0), X_tsne.max(0)
     X_norm = (X_tsne - x_min) / (x_max - x_min)  
@@ -165,9 +169,9 @@ if __name__ == '__main__':
     colorlist=['red','orange','blue','green','cyan','purple']
     for key in c_k_dict:
         if args.tsne_components == 3:
-            ax.scatter(c_k_dict[key][:,0],c_k_dict[key][:,1],c_k_dict[key][:,2],s=30,color=colorlist[key],marker='.',alpha=0.5,label='cluster '+str(key+1)+ ', '+ str(round(dict_outcome_ratio_train[key]*100,2))+'% of outcome 1') 
+            ax.scatter(c_k_dict[key][:,0],c_k_dict[key][:,1],c_k_dict[key][:,2],s=30,color=colorlist[key],marker='.',alpha=0.5,label='cluster '+str(key+1)+ ', '+ str(round(dict_outcome_ratio_train[key]*100,2))+'% of outcome 1; ' + str(round( (dict_c_count[key] / total) * 100, 2)) + ' % of total patients') 
         elif args.tsne_components == 2:
-            ax.scatter(c_k_dict[key][:,0],c_k_dict[key][:,1],s=30,color=colorlist[key],marker='.',alpha=0.5,label='cluster '+str(key+1)+ ', '+ str(round(dict_outcome_ratio_train[key]*100,2))+'% of outcome 1') 
+            ax.scatter(c_k_dict[key][:,0],c_k_dict[key][:,1],s=30,color=colorlist[key],marker='.',alpha=0.5,label='cluster '+str(key+1)+ ', '+ str(round(dict_outcome_ratio_train[key]*100,2))+'% of outcome 1; ' + str(round( (dict_c_count[key] / total) * 100, 2)) + ' % of total patients') 
 
     plt.legend(fontsize = 14, bbox_to_anchor=(0.8, 0.1), loc="lower right")
     ax.view_init(elev=-73, azim= -0)
